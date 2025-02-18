@@ -139,6 +139,8 @@ class ExtractionConfig:
             ]
         )
 
+    def to_dict(self):
+        return self.__dict__
 
 class HookedModel:
     """
@@ -519,6 +521,7 @@ class HookedModel:
                     "component": self.model_config.embed_tokens,
                     "intervention": partial(
                         embed_hook,
+                        token_indexes=token_indexes,
                         cache=cache,
                         cache_key="input_ids",
                     ),
@@ -862,7 +865,7 @@ class HookedModel:
                             layer=i,
                             head=head,
                             attn_pattern_avg=extraction_config.attn_pattern_avg,
-                            attn_pattern_row_partition = None if extraction_config.attn_pattern_row_positions is None else token_dict["attn_pattern_row_positions"],
+                            attn_pattern_row_partition = None if extraction_config.attn_pattern_row_positions is None else tuple(token_dict["attn_pattern_row_positions"]),
                         ),
                     }
                     for i, head in zip(layer_indexes, head_indexes)
@@ -888,9 +891,10 @@ class HookedModel:
         ablation_queries: Optional[List[dict]] = None,
         patching_queries: Optional[List[dict]] = None,
         external_cache: Optional[ActivationCache] = None,
-        attn_heads: Union[list[dict], Literal["all"]] = "all",
+        # attn_heads: Union[list[dict], Literal["all"]] = "all",
         batch_idx: Optional[int] = None,
         move_to_cpu: bool = False,
+        **kwargs,
     ) -> ActivationCache:
         r"""
         Forward pass of the model. It will extract the activations of the model and save them in the cache. It will also perform ablation and patching if needed.
@@ -1196,6 +1200,13 @@ class HookedModel:
         attn_pattern = (
             ActivationCache()
         )  # Initialize the dictionary to hold running averages
+        
+        # if register_agregation is in the kwargs, we will register the aggregation of the attention pattern
+        if "register_aggregation" in kwargs:
+            all_cache.register_aggregation(kwargs["register_aggregation"][0], kwargs["register_aggregation"][1])
+            attn_pattern.register_aggregation(kwargs["register_aggregation"][0], kwargs["register_aggregation"][1])
+            
+        
         example_dict = {}
         n_batches = 0  # Initialize batch counter
 

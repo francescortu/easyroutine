@@ -1,56 +1,66 @@
 import re
-from easyroutine.logger import Logger, LambdaLogger
 import torch
-from typing import List, Union
 import contextlib
+from easyroutine.logger import Logger, LambdaLogger
+from typing import List, Union
 
+def just_old(old, new):
+    """Always return the new value (or if old is None, return new)."""
+    return new if old is None else new
+
+def just_me(old, new):
+    """If no old value, start a list; otherwise, add new to the list."""
+    return [new] if old is None else old + new
+
+def sublist(old, new):
+    """
+    Aggregates by flattening. If old is already a list, extend it;
+    otherwise, put old into a list and add new (flattening if needed).
+    """
+    all_values = []
+    if old is not None:
+        if isinstance(old, list):
+            all_values.extend(old)
+        else:
+            all_values.append(old)
+    if isinstance(new, list):
+        all_values.extend(new)
+    else:
+        all_values.append(new)
+    return all_values
 
 class ValueWithInfo:
     """
-    Thin wrapper around the original value to store extra info.
+    A thin wrapper around a value that also stores extra info.
     """
-
-    __slots__ = ("_value", "_info")  # optional for memory efficiency
+    __slots__ = ("_value", "_info")
 
     def __init__(self, value, info):
         self._value = value
         self._info = info
 
     def info(self):
-        """
-        Return the custom info string.
-        """
         return self._info
 
     def value(self):
-        """
-        Return the value.
-        """
         return self._value
 
     def __getattr__(self, name):
-        """
-        Forward attribute lookups to the wrapped value.
-        """
         return getattr(self._value, name)
 
     def __repr__(self):
         return f"ValueWithInfo(value={self._value!r}, info={self._info!r})"
 
-
 class ActivationCache:
-    r"""
-    Class to store and aggregate activation values from a model.
-    It is a dictionary-like object with additional functionality to aggregate values.
+    """
+    A dictionary-like cache for storing and aggregating model activation values.
+    Supports custom aggregation strategies registered for keys (by prefix match)
+    and falls back to a default aggregation that can dynamically switch types if needed.
     """
 
     def __init__(self):
         self.cache = {}
-        self.logger = Logger(
-            logname="ActivationCache",
-            level="INFO",
-        )
-
+        self.logger = Logger(logname="ActivationCache", level="INFO")
         self.valid_keys = (
             re.compile(r"resid_out_\d+"),
             re.compile(r"resid_in_\d+"),
@@ -64,91 +74,34 @@ class ActivationCache:
             re.compile(r"mapping_index"),
             re.compile(r"mlp_out_\d+"),
         )
-
         self.aggregation_strategies = {}
-        self.register_aggregation(
-            "mapping_index", lambda values: values[0]
-        )  # First value
-        # self.register_aggregation("pattern_", lambda values: values)  # Keep as list
-        self.register_aggregation("input_ids", lambda values: values)  # Keep as list
-        self.register_aggregation(
-            "offset", lambda values: [item for sublist in values for item in sublist]
-        )  # Flatten lists
-
-        self.defferred_cache = False
+        # Register default aggregators for some keys
+        self.register_aggregation("mapping_index", just_old)
+        self.register_aggregation("offset", sublist)
+        self.deferred_cache = False
 
     def __repr__(self) -> str:
-        """
-        Returns:
-            str: A string representation of the ActivationCache object.
-
-        Examples:
-            >>> cache
-            ActivationCache(resid_out_0, resid_in_0, resid_mid_0, attn_in_0, attn_out_0, avg_attn_pattern_L1H1, pattern_L1H1, values_L1H1)
-        """
         return f"ActivationCache(`{', '.join(self.cache.keys())}`)"
 
     def __str__(self) -> str:
-        """
-        Returns:
-            str: A string representation of the ActivationCache object.
-
-        Examples:
-            >>> print(cache)
-            ActivationCache(resid_out_0: torch.Tensor([1, 2, 3, 4]), resid_in_0: torch.Tensor([1, 2, 3, 4]))
-        """
         return f"ActivationCache({', '.join([f'{key}: {value}' for key, value in self.cache.items()])})"
 
     def __setitem__(self, key: str, value):
-        """
-        Set a key-value pair in the cache.
-
-        Arguments:
-            key (str): The key to store the value.
-            value (Any): The value to store.
-
-        Examples:
-            >>> cache["resid_out_0"] = torch.randn(1, 3, 16)
-        """
-        if not any([pattern.match(key) for pattern in self.valid_keys]):
+        if not any(pattern.match(key) for pattern in self.valid_keys):
             self.logger.warning(
                 f"Invalid key: {key}. Valid keys are: {self.valid_keys}. Could be a user-defined key."
             )
         self.cache[key] = value
 
     def __getitem__(self, key: str):
-        """
-        Get a value from the cache.
-
-        Arguments:
-            key (str): The key to retrieve the value.
-
-        Examples:
-            >>> cache["resid_out_0"]
-            torch.Tensor([1, 2, 3, 4])
-        """
         return self.cache[key]
 
     def __delitem__(self, key: str):
-        """
-        Remove a key-value pair from the cache.
-
-        Arguments:
-            key (str): The key to remove from the cache.
-        """
         del self.cache[key]
 
     def __add__(self, other) -> "ActivationCache":
-        """
-        Overload the `+` operator to merge caches efficiently.
-        Arguments:
-            other (dict or ActivationCache): Another cache or dictionary to merge with.
-        Returns:
-            ActivationCache: A new ActivationCache object with merged data.
-        """
         if not isinstance(other, (dict, ActivationCache)):
             raise TypeError("Can only add ActivationCache or dict objects.")
-
         new_cache = ActivationCache()
         new_cache.cache = {
             **self.cache,
@@ -157,269 +110,188 @@ class ActivationCache:
         return new_cache
 
     def __contains__(self, key):
-        """
-        Check if a key is present in the cache.
-        Arguments:
-            key (str): The key to check.
-        Returns:
-            bool: True if the key is present, False otherwise
-        """
         return key in self.cache
 
-    # Define __getstate__ to remove unpicklable objects
     def __getstate__(self):
-        """
-        To support torch.save or pickle save
-        """
         state = self.__dict__.copy()
-        # Remove or reset logger and aggregation_strategies (which contains lambdas)
-        if "logger" in state:
-            del state["logger"]
-        if "aggregation_strategies" in state:
-            del state["aggregation_strategies"]
+        state.pop("logger", None)
+        state.pop("aggregation_strategies", None)
         return state
 
-    # Define __setstate__ to recreate the removed objects
     def __setstate__(self, state):
-        """
-        To support torch.load or pickle load
-        """
         self.__dict__.update(state)
-        # Reinitialize logger
         self.logger = Logger(logname="ActivationCache", level="INFO")
-        # Reinitialize aggregation_strategies with the same definitions
         self.aggregation_strategies = {}
-        self.register_aggregation("mapping_index", lambda values: values[0])
-        # self.register_aggregation("pattern_", lambda values: values)
-        self.register_aggregation("input_ids", lambda values: values)
-        self.register_aggregation(
-            "offset", lambda values: [item for sublist in values for item in sublist]
-        )
-
+        self.register_aggregation("mapping_index", just_old)
+        self.register_aggregation("input_ids", just_me)
+        self.register_aggregation("offset", sublist)
 
     def get(self, key: str, default=None):
         return self.cache.get(key, default)
 
     def items(self):
-        """
-        Just like the dictionary items method, returns a list of key-value pairs.
-        """
         return self.cache.items()
 
     def keys(self):
-        """
-        Just like the dictionary keys method, returns a list of keys.
-        """
         return self.cache.keys()
 
     def values(self):
-        """
-        Just like the dictionary values method, returns a list of values.
-        """
         return self.cache.values()
 
     def update(self, other):
-        """
-        Updates the cache with values from an additional dictionary or ActivationCache object.
-        Arguments:
-            other (Union[dict, ActivationCache]): Dictionary or ActivationCache object to update with.
-        """
         if isinstance(other, dict):
             self.cache.update(other)
-        elif isinstance(other, ActivationCache):
+        elif isinstance(other, type(self)):
             self.cache.update(other.cache)
         else:
             raise TypeError("Can only update with dict or ActivationCache objects.")
 
     def to(self, device: Union[str, torch.device]):
-        """
-        Moves the tensors in the cache to a specified device.
-
-        Args:
-            device (Union[str, torch.device]): The device to move the tensors to.
-        """
-
         for key, value in self.cache.items():
             if hasattr(value, "to"):
                 self.cache[key] = value.to(device)
 
     def cpu(self):
-        """
-        Moves the tensors in the cache to the CPU.
-        """
         self.to("cpu")
 
     def cuda(self):
-        """
-        Moves the tensors in the cache to the GPU.
-        """
         self.to("cuda")
 
     def register_aggregation(self, key_pattern, function):
         """
-        Register a custom aggregation strategy for keys matching a pattern. In this way, you can define how to aggregate values for specific keys when merging caches.
-
-        Arguments:
-            key_pattern (str): The key or prefix to match.
-            function (callable): The function to apply for aggregation.
-
-        Examples:
-            >>> cache.register_aggregation("values_", lambda values: torch.stack(values, dim=0))
+        Registers a custom aggregation function for keys that start with key_pattern.
         """
+        self.logger.info(f"Registering aggregation strategy for keys starting with '{key_pattern}'", std_out=True)
         self.aggregation_strategies[key_pattern] = function
 
     def remove_aggregation(self, key_pattern):
-        """
-        Remove a custom aggregation strategy for keys matching a pattern.
-
-        Arguments:
-            key_pattern (str): The key or prefix to match.
-
-        Examples:
-            >>> cache.remove_aggregation("values_")
-        """
         if key_pattern in self.aggregation_strategies:
             del self.aggregation_strategies[key_pattern]
 
-    def default_aggregation(self, values):
+    def _get_aggregation_strategy(self, key: str):
         """
-        Default aggregation strategy for keys without a custom strategy.
-        Handles tensors, lists, and scalars.
-
-        Arguments:
-            values (List): List of values to aggregate.
-
-        Returns:
-            Union[torch.Tensor, List, Any]: The aggregated value.
+        Returns the aggregation function for the given key.
+        If no custom function is registered, the default aggregation is used.
         """
-        if isinstance(values[0], torch.Tensor):
+        for pattern, strategy in self.aggregation_strategies.items():
+            if key.startswith(pattern):
+                return strategy
+        return self.default_aggregation
+
+    def default_aggregation(self, old, new):
+        """
+        Default aggregation strategy.
+        - If old is None, simply return new.
+        - For torch.Tensor values, first try torch.cat, then torch.stack, and finally fallback to list aggregation.
+        - For lists and tuples, aggregates by appending (or converting tuples to lists).
+        - For ValueWithInfo, aggregates the inner values.
+        - Otherwise, tries the '+' operator and falls back to a list if necessary.
+        """
+        if old is None:
+            return new
+
+        # Aggregation for torch.Tensor
+        if isinstance(old, torch.Tensor) and isinstance(new, torch.Tensor):
             try:
-                # First attempt: concatenate tensors
-                return torch.cat(values, dim=0)
-            except RuntimeError as e:
-                # If concatenation fails, try stacking them
+                return torch.cat([old, new], dim=0)
+            except Exception as e:
+                self.logger.warning(
+                    f"torch.cat failed for tensor shapes {old.shape} and {new.shape}: {e}; trying torch.stack."
+                )
                 try:
-                    return torch.stack(values, dim=0)
-                except RuntimeError as e:
-                    # If stacking fails, log the error and return the values as-is
-                    self.logger.error(f"Tensor aggregation failed: {e}. Returning values as is.")
-                    return values  # Return the values as-is
-        elif isinstance(values[0], list):
-            return [item for sublist in values for item in sublist]
-        elif isinstance(values[0], ValueWithInfo):
-            aggregated_values = self.default_aggregation([value.value() for value in values])
-            info = values[0].info()
-            return ValueWithInfo(aggregated_values, info)
-        else:
-            return values[0]  # Fallback to the first value
+                    return torch.stack([old, new], dim=0)
+                except Exception as e:
+                    self.logger.warning(
+                        f"torch.stack also failed: {e}; switching to list aggregation."
+                    )
+                    return [old, new]
 
+        # Aggregation for lists
+        if isinstance(old, list):
+            return old + (new if isinstance(new, list) else [new])
+
+        # Aggregation for tuples: convert to list
+        if isinstance(old, tuple):
+            if isinstance(new, tuple):
+                return [old, new]
+            elif isinstance(new, list):
+                return [old] + new
+            else:
+                return [old, new]
+
+        # Aggregation for ValueWithInfo: aggregate the underlying values.
+        if isinstance(old, ValueWithInfo) and isinstance(new, ValueWithInfo):
+            aggregated_value = self.default_aggregation(old.value(), new.value())
+            return ValueWithInfo(aggregated_value, old.info())
+
+        # Fallback: try using the + operator.
+        try:
+            return old + new
+        except Exception as e:
+            self.logger.warning(
+                f"Aggregation failed for values {old} and {new}: {e}; using list fallback."
+            )
+            return [old, new]
+
+    def cat(self, external_cache):
+        """
+        Merges the current cache with an external cache using the registered
+        aggregation strategies (or the default if none is registered).
+
+        If the cache is empty, each key is initialized using the aggregator with old=None.
+        Otherwise, keys must match exactly between the two caches.
+        """
+        if not isinstance(external_cache, type(self)):
+            raise TypeError("external_cache must be an instance of ActivationCache")
+
+        # If in deferred mode, store the external cache for later aggregation.
+        if isinstance(self.deferred_cache, list):
+            self.deferred_cache.append(external_cache)
+            return
+
+        # Case 1: If self.cache is empty, initialize each key using the aggregator.
+        if not self.cache:
+            for key, new_value in external_cache.cache.items():
+                aggregator = self._get_aggregation_strategy(key)
+                self.cache[key] = aggregator(None, new_value)
+            return
+
+        # Case 2: Ensure both caches have the same keys.
+        self_keys = set(self.cache.keys())
+        external_keys = set(external_cache.cache.keys())
+        if self_keys != external_keys:
+            raise ValueError(
+                f"Key mismatch: self has {self_keys - external_keys}, external has {external_keys - self_keys}"
+            )
+
+        # Case 3: Aggregate matching keys.
+        for key in self.cache:
+            aggregator = self._get_aggregation_strategy(key)
+            try:
+                self.cache[key] = aggregator(self.cache[key], external_cache.cache[key])
+            except Exception as e:
+                self.logger.error(f"Error aggregating key '{key}': {e}")
+                self.cache[key] = [self.cache[key], external_cache.cache[key]]
 
     @contextlib.contextmanager
     def deferred_mode(self):
         """
-        Context manager to enable deferred aggregation.
-        Collects all external caches in a list and aggregates them at the end of the context.
-        This is most similar to the old way of using the `cat` method. It could (or could not) be more efficient.
-        The main difference to direct calls to `cat` is that the cache is not updated until the end of the context, in this way the torch.cat, torch.stack and the other strategies are called only once.
-        It will require more memory, but it could be more efficient.
-
-        Examples:
-            >>> with cache.deferred_mode():
-            >>>     cache.cat(external_cache1)
-            >>>     cache.cat(external_cache2)
+        Context manager for deferred aggregation. Instead of merging
+        immediately when calling `cat`, external caches are stored and then
+        aggregated once the context is exited.
         """
+        original_deferred = self.deferred_cache
         self.deferred_cache = []
         try:
             yield self
-            # Perform aggregation at the end of the context
-            for external_cache in self.deferred_cache:
-                self.cat(external_cache)
+            for ext_cache in self.deferred_cache:
+                self.cat(ext_cache)
         finally:
-            # Clear the deferred cache
-            self.deferred_cache = None
-
-    def cat(self, external_cache):
-        """
-        Merge the current cache with an external cache using aggregation strategies.
-
-        Arguments:
-            external_cache (ActivationCache): The external cache to merge with.
-
-
-        Examples:
-            >>> a, b = ActivationCache(), ActivationCache()
-            >>> a["values_0"] = torch.tensor([1, 2])
-            >>> b["values_0"] = torch.tensor([1, 4])
-            >>> a.cat(b)
-            >>> print(a["values_0"].shape)
-            torch.Size([2,1])
-            >>> print(a["values_0"])
-            tensor([[2], [4]]
-        """
-        if not isinstance(external_cache, ActivationCache):
-            raise TypeError("external_cache must be an instance of ActivationCache")
-
-        # Case 1: Initialize self if it's empty
-        if not self.cache and external_cache.cache:
-            self.update(external_cache.cache)
-            return
-
-        # Case 2: Ensure both caches have the same keys
-        self_keys = set(self.cache.keys())
-        external_keys = set(external_cache.cache.keys())
-
-        if self_keys != external_keys:
-            raise ValueError(
-                f"Key mismatch: self has {self_keys - external_keys}, "
-                f"external has {external_keys - self_keys}"
-            )
-
-        # Case 3: Aggregate matching keys using registered strategies or default
-        for key in self.cache:
-            # Check for a custom aggregation strategy
-            for pattern, strategy in self.aggregation_strategies.items():
-                if key.startswith(pattern):
-                    self.cache[key] = strategy([self.cache[key], external_cache[key]])
-                    break
-            else:
-                # Use the default aggregation if no custom strategy matches
-                self.cache[key] = self.default_aggregation(
-                    [self.cache[key], external_cache[key]]
-                )
+            self.deferred_cache = original_deferred
 
     def add_with_info(self, key: str, value, info: str):
         """
-        Stores the 'value' under 'key' but wraps it in an object that provides
-        a .info() method returning the 'info' string.
-
-        Arguments:
-            key (str): The cache key.
-            value (Any): The object to store, e.g. a tensor or list.
-            info (str): The associated info string.
-
-        Examples:
-            >>> cache.add_with_info("resid_out_0", torch.randn(1, 3, 16), "shape: batch x seq x hidden")
-            >>> cache["resid_out_0"].info()
-            shape: batch x seq x hidden
-            >>> cache["resid_out_0"].shape
-            torch.Size([1, 3, 16])
-            >>> cache["resid_out_0"]
-            tensor([[[1, 2, 3, 4]]])
-
+        Wraps a value (e.g. a tensor) with additional info and stores it in the cache.
         """
-
-
-
         wrapped = ValueWithInfo(value, info)
         self[key] = wrapped
-
-    # def expand_attention_heads(self, dim):
-    #     """
-    #     Expand the head dimension of all tensors in the cache.
-
-    #     Arguments:
-    #         dim (int): The dimension to expand.
-    #     """
-    #     for key, value in self.cache.items():
-    #         if isinstance(value, torch.Tensor):
-    #             self.cache[key] = value.unsqueeze(dim)

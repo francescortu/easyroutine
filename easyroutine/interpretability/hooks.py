@@ -47,17 +47,27 @@ def create_dynamic_hook(pyvene_hook: Callable, **kwargs):
     return wrap
 
 
-def embed_hook(module, input, output, cache, cache_key):
+# def embed_hook(module, input, output, cache, cache_key):
+#     r"""
+#     Hook function to extract the embeddings of the tokens. It will save the embeddings in the cache (a global variable out the scope of the function)
+#     """
+#     if output is None:
+#         b = input[0]
+#     else:
+#         b = output
+#     cache[cache_key] = b.data.detach().clone()
+#     return b
+
+def embed_hook(module, args, kwargs, output, token_indexes, cache, cache_key):
     r"""
     Hook function to extract the embeddings of the tokens. It will save the embeddings in the cache (a global variable out the scope of the function)
     """
-    if output is None:
-        b = input[0]
-    else:
-        b = output
-    cache[cache_key] = b.data.detach().clone()
-    return b
-
+    b = process_args_kwargs_output(args, kwargs, output)
+    cache[cache_key] = []
+    for token_index in token_indexes:
+        cache[cache_key].append(b.data.detach().clone()[..., list(token_index)])
+    cache[cache_key] = tuple(cache[cache_key])
+    # cache[cache_key] = b.data.detach().clone()
 
 # Define a hook that saves the activations of the residual stream
 def save_resid_hook(
@@ -681,9 +691,9 @@ def attention_pattern_head(
         token_indexes_group1 = token_indexes
         
     
-    if attn_pattern_avg!="none":
+
     # For each token group (each tuple in token_indexes), compute a single average value.
-    
+    if attn_pattern_row_partition is not None:
         for h in head_indices:
             # For head h, pattern has shape [batch, seq_len, seq_len].
             group_avgs = []
@@ -706,6 +716,9 @@ def attention_pattern_head(
                     elif attn_pattern_avg == "baseline_ratio":
                         # ---- Step 1. Compute the observed average attention in the block.
                         observed_val = torch.mean(attn_block, dim=(-2, -1))  # shape: [batch]
+                    
+ 
+                        
                         
                         # ---- Step 2. Compute the baseline expectation.
                         # For each row (i.e. token index) in group1, we calculate the fraction of allowed keys
@@ -723,6 +736,7 @@ def attention_pattern_head(
                             baseline_ratio = allowed_count / total_allowed if total_allowed > 0 else 0.0
                             baseline_list.append(baseline_ratio)
                         
+                        
                         # Average the per-row baseline over all rows in group1.
                         # This represents the expected average attention to group2 if it were uniformly distributed.
                         baseline_val = sum(baseline_list) / len(baseline_list)
@@ -733,15 +747,27 @@ def attention_pattern_head(
                         # Expand baseline_val to match the batch shape for element-wise division.
                         baseline_tensor = torch.tensor(baseline_val, device=observed_val.device).expand_as(observed_val)
                         avg_val = observed_val / baseline_tensor
+                    else:
+                        avg_val = attn_block
                     
-                    # Append the computed metric for this block (keeping the batch dimension).
-                    group_avgs.append(avg_val.unsqueeze(1))  # shape: [batch, 1]
-            pattern_avg = einops.rearrange(torch.cat(group_avgs, dim=1), "batch (G1 G2) -> batch G1 G2", G1=len(token_indexes_group1), G2=len(token_indexes))
+                    if attn_pattern_avg != "none":
+                        # Append the computed metric for this block (keeping the batch dimension).
+                        group_avgs.append(avg_val.unsqueeze(1))  # shape: [batch, 1]
+                    else:
+                        # If no averaging is requested, store the block directly.
+                        group_avgs.append(attn_block)
+                        
+            if attn_pattern_avg != "none":
+                pattern_avg = einops.rearrange(torch.cat(group_avgs, dim=1), "batch (G1 G2) -> batch G1 G2", G1=len(token_indexes_group1), G2=len(token_indexes))
+            else:
+                try:
+                    pattern_avg = torch.cat(group_avgs, dim=1)
+                except:
+                    raise ValueError(f"Error concatenating group_avgs with shapes {[x.shape for x in group_avgs]}")
             
 
             # Add the pattern to the cache
             cache[f"pattern_L{layer}H{h}"] = pattern_avg
-
     else:
         # Without averaging, flatten token_indexes into one list.
         flatten_indexes = [item for tup in token_indexes for item in tup]
