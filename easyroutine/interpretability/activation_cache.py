@@ -1,7 +1,7 @@
 import re
 import torch
 import contextlib
-from easyroutine.logger import Logger, LambdaLogger
+from easyroutine.logger import logger
 from typing import List, Union
 
 def just_old(old, new):
@@ -60,7 +60,6 @@ class ActivationCache:
 
     def __init__(self):
         self.cache = {}
-        self.logger = Logger(logname="ActivationCache", level="INFO")
         self.valid_keys = (
             re.compile(r"resid_out_\d+"),
             re.compile(r"resid_in_\d+"),
@@ -88,7 +87,7 @@ class ActivationCache:
 
     def __setitem__(self, key: str, value):
         if not any(pattern.match(key) for pattern in self.valid_keys):
-            self.logger.warning(
+            logger.warning(
                 f"Invalid key: {key}. Valid keys are: {self.valid_keys}. Could be a user-defined key."
             )
         self.cache[key] = value
@@ -120,7 +119,6 @@ class ActivationCache:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-        self.logger = Logger(logname="ActivationCache", level="INFO")
         self.aggregation_strategies = {}
         self.register_aggregation("mapping_index", just_old)
         self.register_aggregation("input_ids", just_me)
@@ -161,7 +159,7 @@ class ActivationCache:
         """
         Registers a custom aggregation function for keys that start with key_pattern.
         """
-        self.logger.info(f"Registering aggregation strategy for keys starting with '{key_pattern}'", std_out=True)
+        logger.debug(f"Registering aggregation strategy for keys starting with '{key_pattern}'")
         self.aggregation_strategies[key_pattern] = function
 
     def remove_aggregation(self, key_pattern):
@@ -195,13 +193,13 @@ class ActivationCache:
             try:
                 return torch.cat([old, new], dim=0)
             except Exception as e:
-                self.logger.warning(
+                logger.warning(
                     f"torch.cat failed for tensor shapes {old.shape} and {new.shape}: {e}; trying torch.stack."
                 )
                 try:
                     return torch.stack([old, new], dim=0)
                 except Exception as e:
-                    self.logger.warning(
+                    logger.warning(
                         f"torch.stack also failed: {e}; switching to list aggregation."
                     )
                     return [old, new]
@@ -228,7 +226,7 @@ class ActivationCache:
         try:
             return old + new
         except Exception as e:
-            self.logger.warning(
+            logger.warning(
                 f"Aggregation failed for values {old} and {new}: {e}; using list fallback."
             )
             return [old, new]
@@ -270,7 +268,7 @@ class ActivationCache:
             try:
                 self.cache[key] = aggregator(self.cache[key], external_cache.cache[key])
             except Exception as e:
-                self.logger.error(f"Error aggregating key '{key}': {e}")
+                logger.error(f"Error aggregating key '{key}': {e}")
                 self.cache[key] = [self.cache[key], external_cache.cache[key]]
 
     @contextlib.contextmanager
