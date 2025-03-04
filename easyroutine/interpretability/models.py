@@ -62,6 +62,8 @@ class ModelConfig:
     attn_o_proj_input_hook_name: str
     attn_matrix_hook_name: str
     mlp_out_hook_name: str
+    last_layernorm_hook_name: str
+    
 
     attn_out_proj_weight: str
     attn_out_proj_bias: str
@@ -75,7 +77,7 @@ class ModelConfig:
     num_key_value_heads: int
     num_key_value_groups: int
     head_dim: int
-
+    layernorm_type: Literal["RMS", "LayerNorm"]
 
 # SPECIFIC MODEL CONFIGURATIONS
 
@@ -149,6 +151,7 @@ class ModelFactory:
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
+                last_layernorm_hook_name="model.norm.input",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="model.layers[{}].self_attn.o_proj.bias",
                 embed_tokens="model.embed_tokens.input",
@@ -161,6 +164,7 @@ class ModelFactory:
                 num_key_value_groups=model.config.num_attention_heads
                 // model.config.num_key_value_heads,
                 head_dim=model.config.hidden_size // model.config.num_attention_heads,
+                layernorm_type="RMS",
             )
 
         elif model_name in [
@@ -187,6 +191,7 @@ class ModelFactory:
                     attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
                     attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
                     mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
+                    last_layernorm_hook_name="language_model.model.norm.input",
                     attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
                     attn_out_proj_bias="language_model.model.layers[{}].self_attn.o_proj.bias",
                     embed_tokens="language_model.model.embed_tokens.input",
@@ -197,7 +202,8 @@ class ModelFactory:
                     hidden_size=model.language_model.config.hidden_size,
                     num_key_value_heads=model.language_model.config.num_key_value_heads,
                     num_key_value_groups=model.language_model.config.num_attention_heads // model.language_model.config.num_key_value_heads,
-                    head_dim=model.language_model.config.head_dim
+                    head_dim=model.language_model.config.head_dim,
+                    layernorm_type="RMS",
                 )
             elif model_name == "llava-hf/llava-v1.6-mistral-7b-hf":
                 model = LlavaNextForConditionalGeneration.from_pretrained(
@@ -219,6 +225,7 @@ class ModelFactory:
                     attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
                     attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
                     mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
+                    last_layernorm_hook_name="language_model.model.norm.input",
                     attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
                     attn_out_proj_bias="language_model.model.layers[{}].self_attn.o_proj.bias",
                     embed_tokens="language_model.model.embed_tokens.input",
@@ -229,7 +236,8 @@ class ModelFactory:
                     hidden_size=model.language_model.config.hidden_size,
                     num_key_value_heads=model.language_model.config.num_key_value_heads,
                     num_key_value_groups=model.language_model.config.num_attention_heads // model.language_model.config.num_key_value_heads,
-                    head_dim=model.language_model.config.head_dim
+                    head_dim=model.language_model.config.head_dim,
+                    layernorm_type="RMS",
                 )
             else:
                 raise ValueError("Unsupported model_name")
@@ -258,6 +266,7 @@ class ModelFactory:
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
+                last_layernorm_hook_name="model.norm",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="model.layers[{}].self_attn.o_proj.bias",
                 embed_tokens="model.embed_tokens.input",
@@ -270,6 +279,7 @@ class ModelFactory:
                 num_key_value_groups=model.config.num_attention_heads
                 // model.config.num_key_value_heads,
                 head_dim=model.config.hidden_size // model.config.num_attention_heads,
+                layernorm_type="RMS",
             )
 
         elif model_name in ["CohereForAI/aya-101"]:

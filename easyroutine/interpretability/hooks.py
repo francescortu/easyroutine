@@ -68,7 +68,11 @@ def embed_hook(module, args, kwargs, output, token_indexes, cache, cache_key):
         cache[cache_key].append(b.data.detach().clone()[..., list(token_index)])
     cache[cache_key] = tuple(cache[cache_key])
     # cache[cache_key] = b.data.detach().clone()
-
+    
+    
+def layernom_hook(module,args,kwargs,output,token_indexes,cache,cache_key):
+    b = process_args_kwargs_output(args, kwargs, output)
+    pass
 # Define a hook that saves the activations of the residual stream
 def save_resid_hook(
     module,
@@ -230,7 +234,7 @@ def head_out_hook(
     )
     
     if o_proj_bias is not None:
-        projected_values = projected_values + o_proj_bias
+        projected_values = projected_values + o_proj_bias // num_heads
         
     # Process token indexes from projected_values of shape [batch, tokens, num_heads, d_model]
     if avg:
