@@ -70,9 +70,49 @@ def embed_hook(module, args, kwargs, output, token_indexes, cache, cache_key):
     # cache[cache_key] = b.data.detach().clone()
     
     
-def layernom_hook(module,args,kwargs,output,token_indexes,cache,cache_key):
+def compute_statistics(tensor, dim=-1, keepdim=True, eps=1e-6):
+    """
+    Computes the mean, variance, and second moment of a given tensor along a specified dimension.
+
+    Args:
+        tensor (torch.Tensor): Input tensor.
+        dim (int): Dimension along which to compute statistics (default: -1).
+        keepdim (bool): Whether to keep the reduced dimension (default: True).
+        eps (float): Small constant for numerical stability.
+
+    Returns:
+        tuple: (mean, variance, second_moment)
+    """
+    mean = tensor.mean(dim=dim, keepdim=keepdim)  # Compute mean
+    second_moment = tensor.pow(2).mean(dim=dim, keepdim=keepdim)  # Compute second moment
+    variance = second_moment - mean.pow(2)  # Compute variance using E[X²] - (E[X])²
+
+    return mean, variance, second_moment
+
+def layernom_hook(module,args,kwargs,output,token_indexes,cache,cache_key, avg: bool = False):
     b = process_args_kwargs_output(args, kwargs, output)
-    pass
+    if avg:
+        token_avgs = []
+        for token_index in token_indexes:
+            slice_ = b.data.detach().clone()[..., list(token_index), :]
+            mean, variance, second_moment = compute_statistics(slice_)
+            token_avgs.append({
+                               "mean": mean,
+                               "variance": variance,
+                               "second_moment": second_moment
+                               })
+        cache[cache_key] = token_avgs 
+    flatten_indexes = [item for sublist in token_indexes for item in sublist]
+    mean, variance, second_moment = compute_statistics(b[..., flatten_indexes,:])
+    cache[cache_key] = {
+        "mean": mean,
+        "variance": variance,
+        "second_moment": second_moment
+    }
+    
+
+
+
 # Define a hook that saves the activations of the residual stream
 def save_resid_hook(
     module,

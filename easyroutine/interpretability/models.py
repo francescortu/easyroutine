@@ -290,9 +290,10 @@ class ModelFactory:
                 attn_implementation=attn_implementation,
             )
             language_model = None
-            model_config = ModelFactory._create_model_config(
-                model.config, prefix="encoder."
-            )
+            raise NotImplementedError("CohereForAI model not implemented yet")
+            # model_config = ModelFactory._create_model_config(
+            #     model.config, prefix="encoder."
+            # )
 
         else:
             raise ValueError("Unsupported model_name")

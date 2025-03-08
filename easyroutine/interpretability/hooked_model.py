@@ -34,6 +34,7 @@ from easyroutine.interpretability.hooks import (
     process_args_kwargs_output,
     query_key_value_hook,
     head_out_hook,
+    layernom_hook
 )
 
 from functools import partial
@@ -106,6 +107,7 @@ class ExtractionConfig:
     extract_attn_out: bool = False
     extract_attn_in: bool = False
     extract_mlp_out: bool = False
+    extract_last_layernorm: bool = False
     save_input_ids: bool = False
     avg: bool = False
     avg_over_example: bool = False
@@ -700,6 +702,19 @@ class HookedModel:
                 for i in range(0, self.model_config.num_hidden_layers)
             ]
 
+        if extraction_config.extract_last_layernorm:
+            hooks += [
+                {
+                    "component": self.model_config.last_layernorm,
+                    "intervention": partial(
+                        layernom_hook,
+                        cache=cache,
+                        cache_key="last_layernorm",
+                        token_indexes=token_indexes,
+                        avg=extraction_config.avg,
+                    ),
+                }
+            ]
         # PATCHING
         if patching_queries:
             token_to_pos = partial(
@@ -996,6 +1011,11 @@ class HookedModel:
                     current_index += 1
             else:
                 raise ValueError("Token dict must be an int, a dict or a list")
+        # update the mapping index in the cache if avg
+        if extraction_config.avg:
+            for i,token in enumerate(target_token_positions):
+                mapping_index[token] = [i]
+            mapping_index["info"] = "avg"
         cache["mapping_index"] = mapping_index
 
         self.remove_hooks(hook_handlers)

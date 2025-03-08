@@ -4,6 +4,8 @@ import contextlib
 from easyroutine.logger import Logger, LambdaLogger
 from typing import List, Union
 
+#TODO: Add a method to expand the tensors in the cache adding the target token dimension using the mapping_index key. In this way we can have a tensors of shape (batch_size, target_tokens, num_tokens, hidden_size) and resolve the ambiguity of the target tokens when we have the average. Indeed, now we have a tensor of shape (batch_size, num_tokens, hidden_size) and mapping index map the index of the second dimension to the correct token. However, the second dim could be both single token or multiple tokens averaged. If we add a new dimension, could be easier to understand.
+
 def just_old(old, new):
     """Always return the new value (or if old is None, return new)."""
     return new if old is None else new

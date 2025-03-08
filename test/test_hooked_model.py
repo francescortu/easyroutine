@@ -147,7 +147,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
     def test_hook_resid_out(self):
         cache = self.MODEL.forward(
             self.INPUTS,
-            self.TARGET_TOKEN_POSITION,
+            self.TARGET_TOKEN_POSITION + ["last"],
             pivot_positions=[4],
             extraction_config=ExtractionConfig(extract_resid_out=True),
         )
