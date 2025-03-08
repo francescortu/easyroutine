@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from easyroutine.logger import LambdaLogger
+from easyroutine.logger import logger
 from transformers import (
     ChameleonProcessor,
     ChameleonForConditionalGeneration,
@@ -125,9 +125,8 @@ class ModelFactory:
             model_config (ModelConfig): Model configuration.
         """
         if attn_implementation != "eager":
-            LambdaLogger.log(
-                "Using an attention type different from eager or custom eager could have unexpected behavior in some experiments!",
-                "WARNING",
+            logger.warning(
+                "ModelFactory: Using an attention type different from eager or custom eager could have unexpected behavior in some experiments!",
             )
 
         language_model = None

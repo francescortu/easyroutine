@@ -4,6 +4,7 @@ from typing_extensions import Literal
 import random
 import yaml
 import importlib.resources
+from easyroutine.logger import logger
 
 TokenType = Union[str, int, Tuple[int, int]]  # New type for tokens
 

@@ -12,7 +12,7 @@ from easyroutine.interpretability.module_wrappers.mistral_attention import (
     MistralAttentionWrapper,
 )
 from easyroutine.interpretability.module_wrappers.T5_attention import T5AttentionWrapper
-from easyroutine.logger import Logger, LambdaLogger
+from easyroutine.logger import logger
 
 from easyroutine.interpretability.utils import parse_module_path, find_all_modules
 
@@ -73,7 +73,6 @@ class ModuleWrapperManager:
         """
         Initializes the manager with a given model name.
         """
-        self.logger = Logger(logname="ModuleWrapperManager", level=log_level)
 
         # Fetch the appropriate wrapper class for the given model name
         self.attention_wrapper_class = AttentionWrapperFactory.get_wrapper_class(model) # TODO: extend to support multiple module type for model

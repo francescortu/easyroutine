@@ -10,7 +10,7 @@ from easyroutine.interpretability.hooks import (
     # ablate_tokens_hook_flash_attn,
 )
 from easyroutine.interpretability.utils import preprocess_ablation_queries
-
+from easyroutine.logger import logger
 # The current version of AbaltionManager doesn't allow to ablate different kind of tokens in the same layer
 
 

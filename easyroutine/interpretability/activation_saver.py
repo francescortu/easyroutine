@@ -1,5 +1,5 @@
 import re
-from easyroutine.logger import Logger, LambdaLogger
+from easyroutine.logger import logger
 import torch
 from typing import List, Union, Optional
 import contextlib

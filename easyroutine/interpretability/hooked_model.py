@@ -11,7 +11,7 @@ from easyroutine.interpretability.token_index import TokenIndex
 from easyroutine.interpretability.activation_cache import ActivationCache
 from easyroutine.interpretability.utils import get_attribute_by_name
 from easyroutine.interpretability.module_wrappers.manager import ModuleWrapperManager
-from easyroutine.logger import Logger
+from easyroutine.logger import logger
 from tqdm import tqdm
 from dataclasses import dataclass
 from easyroutine.interpretability.ablation import AblationManager
@@ -151,11 +151,6 @@ class HookedModel:
     """
 
     def __init__(self, config: HookedModelConfig, log_file_path: Optional[str] = None):
-        self.logger = Logger(
-            logname="HookedModel",
-            level="info",
-            log_file_path=log_file_path,
-        )
 
         self.config = config
         self.hf_model, self.hf_language_model, self.model_config = (
@@ -187,9 +182,8 @@ class HookedModel:
 
         self.first_device = next(self.hf_model.parameters()).device
         device_num = torch.cuda.device_count()
-        self.logger.info(
-            f"Model loaded in {device_num} devices. First device: {self.first_device}",
-            std_out=True,
+        logger.info(
+            f"HookedModel: Model loaded in {device_num} devices. First device: {self.first_device}"
         )
         self.act_type_to_hook_name = {
             "resid_in": self.model_config.residual_stream_input_hook_name,
@@ -204,12 +198,11 @@ class HookedModel:
         self.assert_all_modules_exist()
 
         if self.config.attn_implementation == "custom_eager":
-            self.logger.info(
-                """
+            logger.info(
+                """ HookedModel:
                             The model is using the custom eager attention implementation that support attention matrix hooks because I get config.attn_impelemntation == 'custom_eager'. If you don't want this, you can call HookedModel.restore_original_modules. 
                             However, we reccomend using this implementation since the base one do not contains attention matrix hook resulting in unexpected behaviours. 
                             """,
-                std_out=True,
             )
             self.set_custom_modules()
 
@@ -265,14 +258,14 @@ class HookedModel:
         """
         Apply the wrap of the custom modules. for now just the attention module
         """
-        self.logger.info("Setting custom modules.", std_out=True)
+        logger.info("HookedModel: Setting custom modules.")
         self.module_wrapper_manager.substitute_attention_module(self.hf_model)
 
     def restore_original_modules(self):
         """
         Restore the original modules of the model unloading the custom modules.
         """
-        self.logger.info("Restoring original modules.", std_out=True)
+        logger.info("HookedModel: Restoring original modules.")
         self.module_wrapper_manager.restore_original_attention_module(self.hf_model)
 
     def is_multimodal(self) -> bool:
@@ -285,22 +278,21 @@ class HookedModel:
 
     def use_full_model(self):
         if self.processor is not None:
-            self.logger.info("Using full model capabilities", std_out=True)
+            logger.info("HookedModel: Using full model capabilities")
         else:
             if self.base_model is not None:
                 self.hf_model = self.base_model
-            self.logger.info("Using full text only model capabilities", std_out=True)
+            logger.info("HookedModel: Using full text only model capabilities")
 
     def use_language_model_only(self):
         if self.hf_language_model is None:
-            self.logger.warning(
-                "The model does not have a separate language model that can be used",
-                std_out=True,
+            logger.warning(
+                "HookedModel: The model does not have a separate language model that can be used",
             )
         else:
             self.base_model = self.hf_model
             self.hf_model = self.hf_language_model
-            self.logger.info("Using only language model capabilities", std_out=True)
+            logger.info("HookedModel: Using only language model capabilities")
 
     def get_tokenizer(self):
         return self.hf_tokenizer
@@ -838,12 +830,12 @@ class HookedModel:
         if extraction_config.extract_attn_pattern:
             if extraction_config.avg_over_example:
                 if external_cache is None:
-                    self.logger.warning(
+                   logger.warning(
                         """The external_cache is None. The average could not be computed since missing an external cache where store the iterations.
                         """
                     )
                 elif batch_idx is None:
-                    self.logger.warning(
+                   logger.warning(
                         """The batch_idx is None. The average could not be computed since missing the batch index.
                        
                         """
@@ -1088,9 +1080,8 @@ class HookedModel:
             try:
                 self.assert_module_exists(component)
             except ValueError as e:
-                self.logger.warning(
-                    f"Error: {e}. Probably the module {component} do not exists in the model. If the module is the attention_matrix_hook, try callig HookedModel.set_custom_hooks() or setting attn_implementation == 'custom_eager'.  Now we will skip the hook for the component {component}",
-                    std_out=True,
+                logger.warning(
+                    f"Error: {e}. Probably the module {component} do not exists in the model. If the module is the attention_matrix_hook, try callig HookedModel.set_custom_hooks() or setting attn_implementation == 'custom_eager'.  Now we will skip the hook for the component {component}"
                 )
                 continue
             if last_module == "input":
@@ -1211,11 +1202,11 @@ class HookedModel:
             {'resid_out_0': tensor([[[0.1, 0.2, 0.3, 0.4]]], grad_fn=<CopyBackwards>), 'labels': tensor([1]), 'mapping_index': {'last': [0]}}
         """
 
-        self.logger.info("Extracting cache", std_out=True)
+        logger.info("HookedModel: Extracting cache")
 
         # get the function to save in the cache the additional element from the batch sime
 
-        self.logger.info("Forward pass started", std_out=True)
+        logger.info("HookedModel: Forward pass started")
         all_cache = ActivationCache()  # a list of dictoionaries, each dictionary contains the activations of the model for a batch (so a dict of tensors)
         attn_pattern = (
             ActivationCache()
@@ -1265,12 +1256,12 @@ class HookedModel:
             del inputs
             torch.cuda.empty_cache()
 
-        self.logger.info(
-            "Forward pass finished - started to aggregate different batch", std_out=True
+        logger.debug(
+            "Forward pass finished - started to aggregate different batch"
         )
         all_cache.update(attn_pattern)
         all_cache["example_dict"] = example_dict
-        # self.logger.info("Aggregation finished", std_out=True)
+        # logger.info("HookedModel: Aggregation finished")
 
         torch.cuda.empty_cache()
         return all_cache
@@ -1346,12 +1337,11 @@ class HookedModel:
                 "logit_diff_in_patched": tensor of shape [batch] with the logit difference in the patched logits
             }
         """
-        self.logger.info("Computing patching", std_out=True)
+        logger.debug("HookedModel: Computing patching")
 
-        self.logger.info("Forward pass started", std_out=True)
-        self.logger.info(
-            f"Patching elements: {[q['patching_elem'] for q in patching_query]} at {[query['activation_type'][:-3] for query in patching_query]}",
-            std_out=True,
+        logger.debug("HookedModel: Forward pass started")
+        logger.info(
+            f"HookedModel: Patching elements: {[q['patching_elem'] for q in patching_query]} at {[query['activation_type'][:-3] for query in patching_query]}"
         )
 
         # if target_token_positions is not a list, convert it to a list
@@ -1463,7 +1453,7 @@ class HookedModel:
                     raise ValueError(
                         "To compute the logit difference, you need to pass the base_dictonary_idxs and the target_dictonary_idxs"
                     )
-                self.logger.info("Computing logit difference", std_out=True)
+                logger.info("HookedModel: Computing logit difference")
                 # get the target tokens (" cat" and " dog")
                 base_targets = base_dictonary_idxs[index]
                 target_targets = target_dictonary_idxs[index]
@@ -1507,10 +1497,10 @@ class HookedModel:
             # all_cache.append(target_patched_cache)
             all_cache.cat(target_patched_cache)
 
-        self.logger.info(
-            "Forward pass finished - started to aggregate different batch", std_out=True
+        logger.debug(
+            "HookedModel: Forward pass finished - started to aggregate different batch"
         )
         # final_cache = aggregate_cache_efficient(all_cache)
 
-        self.logger.info("Aggregation finished", std_out=True)
+        logger.debug("HookedModel: Aggregation finished")
         return all_cache
