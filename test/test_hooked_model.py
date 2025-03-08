@@ -604,7 +604,9 @@ class BaseHookedModelTestCase(unittest.TestCase):
         # TODO: Implement this test
         pass
 
-
+    def test_token_index(self):
+        # TODO: add edge cases for token_index
+        pass
 ################### BASE TEST CASES ######################
 class TestHookedTestModel(BaseHookedModelTestCase):
     """

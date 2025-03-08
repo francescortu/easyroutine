@@ -1138,7 +1138,6 @@ class HookedModel:
             {'sequences': tensor([[101, 1234, 1235, 102]])}
         """
         # Initialize cache for logits
-        # TODO FIX THIS. IT is not general and it is not working
         # raise NotImplementedError("This method is not working. It needs to be fixed")
         hook_handlers = None
         if target_token_positions is not None:
