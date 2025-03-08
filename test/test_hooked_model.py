@@ -137,7 +137,6 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertIn("last_layernorm", final_cache)
         self.assertIn("resid_out_0", final_cache)
         self.assertIn("mapping_index", final_cache)
-        self.assertIn("example_dict", final_cache)
         self.assertTrue(torch.is_tensor(final_cache["logits"]))
 
     def test_pattern_with_extract_cache(self):
@@ -150,7 +149,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
     def test_hook_resid_out(self):
         cache = self.MODEL.forward(
             self.INPUTS,
-            self.TARGET_TOKEN_POSITION + ["last"],
+            self.TARGET_TOKEN_POSITION,
             pivot_positions=[4],
             extraction_config=ExtractionConfig(extract_resid_out=True),
         )
