@@ -1,28 +1,28 @@
 import torch
 import torch.nn as nn
-from typing import Union, Optional, Tuple, List
+import torch.nn.functional as F
+from typing import Union, Optional, Tuple, List, Literal
 from easyroutine.interpretability.activation_cache import ActivationCache
 from easyroutine.interpretability.hooked_model import HookedModel
-from easyroutine.logger import Logger
+from easyroutine.interpretability.models import ModelConfig
+from easyroutine.logger import logger
 from tqdm import tqdm
 from copy import deepcopy
 import re
 
 class LogitLens:
-    def __init__(self, unembedding_matrix, last_layer_norm: nn.Module, model_name: str):
+    def __init__(self, unembedding_matrix, last_layer_norm: nn.Module, model_name: str, model_config:ModelConfig):
         self.unembed = deepcopy(unembedding_matrix)
         self.norm = deepcopy(last_layer_norm)
-        self.logger = Logger(
-            logname = "LogitLens",
-            level="INFO"
-        )
         self.model_name = model_name
+        self.layernorm_type:Literal["RMS", "LayerNorm"] = model_config.layernorm_type
+        self.num_attn_heads  = model_config.num_attention_heads
         
     def __repr__(self):
         return f"LogitLens({self.model_name})"
     @classmethod
     def from_model(cls, model: HookedModel) -> 'LogitLens':
-        return cls(model.get_lm_head(), model.get_last_layernorm(), model.config.model_name)
+        return cls(model.get_lm_head(), model.get_last_layernorm(), model.config.model_name, model.model_config)
     
     @classmethod
     def from_model_name(cls, model_name: str) -> 'LogitLens':
@@ -99,60 +99,129 @@ class LogitLens:
         
         return sorted(matching_keys, key=sort_key)
     
+    def apply_layernorm(self, act, mean, variance, second_moment, key):
+        """
+        Apply RMSNorm or LayerNorm correctly.
+
+        - RMSNorm: Uses `second_moment` for normalization.
+        - LayerNorm: Uses `mean` and `variance`, applying it manually when cached parameters exist.
+
+        Args:
+            act (torch.Tensor): Activation tensor `[batch, token_indexes, hidden_dim]`
+            mean (torch.Tensor): Cached mean `[batch, token_indexes]`
+            variance (torch.Tensor): Cached variance `[batch, token_indexes]`
+            second_moment (torch.Tensor): Cached second moment `[batch, token_indexes]`
+            key (str): The activation key to decide normalization type.
+
+        Returns:
+            torch.Tensor: Normalized activation tensor.
+        """
+        input_dtype = act.dtype
+        act = act.to(torch.float32)  # Improve numerical stability
+        normalized_shape = (act.shape[-1],)  # Normalize across `hidden_dim`
+        device = act.device
+
+        if self.layernorm_type == "RMS":
+            weight = self.norm.weight
+            variance_eps = self.norm.variance_epsilon
+            weight= weight.to(device)
+
+            # Ensure broadcasting `[batch, token_indexes] -> [batch, token_indexes, hidden_dim]`
+            second_moment = second_moment.unsqueeze(-1)
+
+            # RMSNorm computation: x / sqrt(E[x²] + eps)
+            act = act * torch.rsqrt(second_moment + variance_eps)
+            return weight * act.to(input_dtype)
+
+        elif self.layernorm_type == "LayerNorm":
+            weight = self.norm.weight
+            bias = self.norm.bias
+            eps = self.norm.eps
+            weight = weight.to(device)
+
+            # Ensure broadcasting `[batch, token_indexes] -> [batch, token_indexes, hidden_dim]`
+            mean = mean.unsqueeze(-1)
+            variance = variance.unsqueeze(-1)
+
+            # Apply LayerNorm manually
+            act = (act - mean) / torch.sqrt(variance + eps)
+
+            if "head" in key:
+                return weight * act + (bias / self.num_attn_heads).unsqueeze(-1)
+            else:
+                return weight * act + bias.unsqueeze(-1)
+
     def compute(
         self,
         activations: ActivationCache,
         target_key: str,
-        token_directions: Optional[Union[List[int], List[Tuple[int,int]]]] = None,
+        token_directions: Optional[Union[List[int], List[Tuple[int, int]]]] = None,
         apply_norm: bool = True,
         apply_softmax: bool = False,
     ) -> dict:
         """
         Compute the logit lens on the activations given at the target_key.
-        
+
         Arguments:
-            activations (ActivationCache): the activations store where to get the activations from
-            target_key (str): the key where apply the logit lens. E.g. "resid_out_0" or "resid_out_{i}"
-            apply_norm (bool): whether to apply the last layer norm before the unembedding matrix
-            apply_softmax (bool): whether to apply the softmax after the unembedding matrix
-            
+            activations (ActivationCache): The activations store.
+            target_key (str): The key where to apply the logit lens.
+            apply_norm (bool): Whether to apply the last layer norm.
+            apply_softmax (bool): Whether to apply softmax after unembedding.
+
         Returns:
-            dict: a dictionary with the logit lens for each key found in the activations
-                    
+            dict: A dictionary with the logit lens results.
         """
+
+        # Ensure last_layernorm parameters are available if applying normalization
+        if apply_norm:
+            assert "last_layernorm" in activations.keys(), "Last layer norm not found in activations"
+
         keys = self.get_keys(activations, target_key)
-        
         logit_lens = {}
+        last_layernorm_cached_parameters = activations.get("last_layernorm")
+
         for key in tqdm(keys, total=len(keys), desc=f"Computing Logit Lens of {target_key}"):
-            act = activations.get(key).to(self.device())
-            
+            act = activations.get(key).to("cpu")  # Assuming computations on CPU
+
             if token_directions is not None:
-                assert len(token_directions) == act.shape[0], "Token directions must have the same length of the example in the activations"
-                
+                assert len(token_directions) == act.shape[0], "Token directions must match batch size"
+
                 batch_size = act.shape[0]
                 seq_len = act.shape[1] if len(act.shape) > 2 else 1
                 logits = torch.zeros(batch_size, seq_len, device=act.device)
-                
+
                 for i, direction in enumerate(token_directions):
                     if isinstance(direction, tuple):
                         tok1, tok2 = direction
                         direction_vector = self.unembed[tok1] - self.unembed[tok2]
                     else:
                         direction_vector = self.unembed[direction]
-                    
+
+                    # Select activations and corresponding norm parameters
                     curr_act = act[i] if len(act.shape) == 2 else act[i].reshape(-1, act.shape[-1])
+                    mean = last_layernorm_cached_parameters["mean"][i, :]
+                    variance = last_layernorm_cached_parameters["variance"][i, :]
+                    second_moment = last_layernorm_cached_parameters["second_moment"][i, :]
+
+                    # Apply LayerNorm
                     if apply_norm:
-                        curr_act = self.norm(curr_act)
-                    
-                    logits[i] = torch.matmul(curr_act, direction_vector)
-                
+                        curr_act = self.apply_layernorm(curr_act, mean, variance, second_moment, key)
+
+                    logits[i] = torch.matmul(curr_act.to(self.unembed.device), direction_vector)
+
                 logit_lens[f"logit_lens_{key}"] = logits
+
             else:
                 if apply_norm:
-                    act = self.norm(act)
-                logits = torch.matmul(act, self.unembed.T)
+                    mean = last_layernorm_cached_parameters["mean"]
+                    variance = last_layernorm_cached_parameters["variance"]
+                    second_moment = last_layernorm_cached_parameters["second_moment"]
+
+                    act = self.apply_layernorm(act, mean, variance, second_moment, key)
+
+                logits = torch.matmul(act.to(self.unembed.device), self.unembed.T)
                 if apply_softmax:
                     logits = torch.softmax(logits, dim=-1)
                 logit_lens[f"logit_lens_{key}"] = logits
-        
+
         return logit_lens

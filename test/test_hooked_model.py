@@ -57,7 +57,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
 
     def test_device(self):
         device = self.MODEL.device()
-        self.assertEqual(device.type, "cuda") 
+        self.assertEqual(device.type, "cuda")
 
     def test_to_string_tokens(self):
         """
@@ -128,15 +128,18 @@ class BaseHookedModelTestCase(unittest.TestCase):
             dataloader,
             target_token_positions=target_token_positions,
             batch_saver=batch_saver,
-            extraction_config=ExtractionConfig(extract_resid_out=True),
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True, extract_last_layernorm=True
+            ),
         )
 
         self.assertIn("logits", final_cache)
+        self.assertIn("last_layernorm", final_cache)
         self.assertIn("resid_out_0", final_cache)
         self.assertIn("mapping_index", final_cache)
         self.assertIn("example_dict", final_cache)
         self.assertTrue(torch.is_tensor(final_cache["logits"]))
-        
+
     def test_pattern_with_extract_cache(self):
         """
         Pattern is dangerous, needs its own test
@@ -156,7 +159,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertEqual(
             cache["resid_out_0"].shape, (1, 4, self.MODEL.model_config.hidden_size)
         )
-        
+
     def test_hook_resid_out_avg(self):
         cache = self.MODEL.forward(
             self.INPUTS,
@@ -168,7 +171,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertEqual(
             cache["resid_out_0"].shape, (1, 2, self.MODEL.model_config.hidden_size)
         )
-        
+
     def test_slice_tokens(self):
         """
         Test the slice_tokens support in the forward method
@@ -179,12 +182,12 @@ class BaseHookedModelTestCase(unittest.TestCase):
             pivot_positions=[4],
             extraction_config=ExtractionConfig(extract_resid_out=True),
         )
-        
+
         self.assertIn("resid_out_0", cache)
         self.assertEqual(
             cache["resid_out_0"].shape, (1, 4, self.MODEL.model_config.hidden_size)
         )
-        
+
     def test_hook_resid_out_multimodal(self):
         if not self.MODEL.is_multimodal():
             return
@@ -197,9 +200,10 @@ class BaseHookedModelTestCase(unittest.TestCase):
         # assert that cache resid_out_0 has shape (1,something,hid_size)
         self.assertIn("resid_out_0", cache)
         self.assertEqual(
-            cache["resid_out_0"][:,:4,:].shape, (1, 4, self.MODEL.model_config.hidden_size)
+            cache["resid_out_0"][:, :4, :].shape,
+            (1, 4, self.MODEL.model_config.hidden_size),
         )
-        
+
     def test_hook_resid_in(self):
         cache = self.MODEL.forward(
             self.INPUTS,
@@ -212,7 +216,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertEqual(
             cache["resid_in_0"].shape, (1, 4, self.MODEL.model_config.hidden_size)
         )
-        
+
     def test_hook_resid_in_avg(self):
         cache = self.MODEL.forward(
             self.INPUTS,
@@ -237,7 +241,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertEqual(
             cache["resid_mid_0"].shape, (1, 4, self.MODEL.model_config.hidden_size)
         )
-        
+
     def test_hook_resid_mid_avg(self):
         cache = self.MODEL.forward(
             self.INPUTS,
@@ -276,7 +280,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertEqual(
             cache["queries_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
         )
-        
+
     def test_hook_extract_head_key_value_keys_avg(self):
         self.MODEL.restore_original_modules()
         cache = self.MODEL.forward(
@@ -358,6 +362,16 @@ class BaseHookedModelTestCase(unittest.TestCase):
             cache["mlp_out_0"].shape, (1, 4, self.MODEL.model_config.hidden_size)
         )
 
+    def test_hook_extract_last_layernorm(self):
+        cache = self.MODEL.forward(
+            self.INPUTS,
+            self.TARGET_TOKEN_POSITION,
+            pivot_positions=[4],
+            extraction_config=ExtractionConfig(extract_last_layernorm=True),
+        )
+        # assert that cache["last_layernorm
+        self.assertIn("last_layernorm", cache)
+
     def test_hook_extract_resid_in_post_layernorm(self):
         cache = self.MODEL.forward(
             self.INPUTS,
@@ -389,7 +403,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
             extraction_config=ExtractionConfig(
                 extract_attn_pattern=True,
                 avg_over_example=True,
-                attn_pattern_row_positions=["last"]
+                attn_pattern_row_positions=["last"],
             ),
             external_cache=external_cache,
             batch_idx=1,
@@ -407,24 +421,20 @@ class BaseHookedModelTestCase(unittest.TestCase):
         Expanded test to verify that attention_pattern_head handles
         multiple avg_methods and row_partitions as intended.
         """
-        methods = [
-            "mean",
-            "sum", 
-            "baseline_ratio"
-        ]
-        
+        methods = ["mean", "sum", "baseline_ratio"]
+
         # Example partitions:
         #  1) None -> uses the same token groups as `target_token_positions`
-        #  2) "last" -> if your code interprets strings as special instructions 
+        #  2) "last" -> if your code interprets strings as special instructions
         #  3) "all"  -> similarly
         #  4) Explicit partitions as a list of tuples, e.g. [(0,1,2), (3,4,5)]
         row_partitions = [
             None,
             ["all"],
             ["last"],
-            [(0,3), (3,5)],  # example: two groups
+            [(0, 3), (3, 5)],  # example: two groups
         ]
-        
+
         for method in methods:
             for partition in row_partitions:
                 with self.subTest(method=method, row_partition=partition):
@@ -435,7 +445,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
                     # so you can see how multiple groups might be tested.
                     # If your code needs token_positions to be a list of tuples, you can do so:
                     target_pos = [(0, 1), (2, 3)]  # example grouping
-                    pivot_pos = [4, 5]            # just an example
+                    pivot_pos = [4, 5]  # just an example
 
                     cache = self.MODEL.forward(
                         self.INPUTS,
@@ -444,8 +454,8 @@ class BaseHookedModelTestCase(unittest.TestCase):
                         extraction_config=ExtractionConfig(
                             extract_attn_pattern=True,
                             avg_over_example=False,  # ensures we run the averaging path
-                            attn_pattern_avg=method, #type: ignore
-                            attn_pattern_row_positions=partition
+                            attn_pattern_avg=method,  # type: ignore
+                            attn_pattern_row_positions=partition,
                         ),
                         batch_idx=0,  # or 1, or whichever
                     )
@@ -453,30 +463,35 @@ class BaseHookedModelTestCase(unittest.TestCase):
                     # Depending on your usage, you might store the results in specific keys
                     # For example, "pattern_L0H0", "pattern_L0H1", etc.
                     # So we can assert they exist in external_cache:
-                    for h in range(self.MODEL.model_config.num_attention_heads):  # adapt to your model
+                    for h in range(
+                        self.MODEL.model_config.num_attention_heads
+                    ):  # adapt to your model
                         key = f"pattern_L0H{h}"
                         # or if your code calls add_with_info as "pattern_L{layer}H{h}"
                         # or "avg_pattern_L{layer}H{h}", etc.
-                        self.assertIn(key, cache.keys(), 
-                                      msg=f"Missing {key} in cache with method={method} partition={partition}")
+                        self.assertIn(
+                            key,
+                            cache.keys(),
+                            msg=f"Missing {key} in cache with method={method} partition={partition}",
+                        )
                         if partition is None:
                             self.assertEqual(
                                 cache[key].shape,
                                 (1, 2, 2),
-                                msg=f"Shape mismatch for {key} with method={method} partition={partition}"
+                                msg=f"Shape mismatch for {key} with method={method} partition={partition}",
                             )
                         else:
                             if len(partition) == 1:
                                 self.assertEqual(
                                     cache[key].shape,
                                     (1, 1, 2),
-                                    msg=f"Shape mismatch for {key} with method={method} partition={partition}"
+                                    msg=f"Shape mismatch for {key} with method={method} partition={partition}",
                                 )
                             elif len(partition) == 2:
                                 self.assertEqual(
                                     cache[key].shape,
                                     (1, 2, 2),
-                                    msg=f"Shape mismatch for {key} with method={method} partition={partition}"
+                                    msg=f"Shape mismatch for {key} with method={method} partition={partition}",
                                 )
 
     def test_hook_extract_attn_pattern(self):
@@ -492,8 +507,6 @@ class BaseHookedModelTestCase(unittest.TestCase):
         self.assertEqual(
             cache["pattern_L1H1"].shape, (1, self.input_size, self.input_size)
         )
-        
-
 
     def test_module_wrapper(self):
         """
@@ -591,7 +604,6 @@ class BaseHookedModelTestCase(unittest.TestCase):
     def test_patching(self):
         # TODO: Implement this test
         pass
-    
 
 
 ################### BASE TEST CASES ######################

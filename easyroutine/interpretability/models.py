@@ -265,7 +265,7 @@ class ModelFactory:
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
-                last_layernorm_hook_name="model.norm",
+                last_layernorm_hook_name="model.norm.input",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="model.layers[{}].self_attn.o_proj.bias",
                 embed_tokens="model.embed_tokens.input",

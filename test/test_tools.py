@@ -24,7 +24,9 @@ class TestLogitLens(unittest.TestCase):
                 fake_dataset,
                 target_token_positions=["last"],
                 extraction_config = ExtractionConfig(
-                    extract_resid_out=True
+                    extract_resid_out=True,
+                    extract_last_layernorm=True,
+                    # extract_head_out=True,
                 )
         )
         
@@ -39,7 +41,7 @@ class TestLogitLens(unittest.TestCase):
         # assert logit_lens_out["logit_lens_resid_out_0"].shape == (2,1,32000)
         
         self.assertTrue(logit_lens_out["logit_lens_resid_out_0"].shape == (2,1,32000))
-        
+    
         
 if __name__ == "__main__":
     unittest.main()

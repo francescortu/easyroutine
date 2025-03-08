@@ -54,10 +54,10 @@ class AttentionWrapperFactory:
         
         for candidate_name, candidate_wrappers in AttentionWrapperFactory.AVAILABLE_MODULE_WRAPPERS.items():
             if candidate_name in all_modules:
-                LambdaLogger().info(f"Found a wrapper for {candidate_name}")
+                logger.info(f"Found a wrapper for {candidate_name}")
                 return candidate_wrappers
         
-        LambdaLogger().warning(f"Do not have any wrapper for {model}")
+        logger.warning(f"Do not have any wrapper for {model}")
 
 
 
@@ -128,7 +128,7 @@ class ModuleWrapperManager:
                     wrapped_module = self.attention_wrapper_class(child)
                     setattr(module, name, wrapped_module)
 
-                    self.logger.info(
+                    logger.info(
                         f"Substituted '{submodule_path}' with wrapper for {self.target_module_name}."
                     )
                 else:
@@ -141,11 +141,11 @@ class ModuleWrapperManager:
                     if submodule_path in self.original_modules:
                         original_module = self.original_modules[submodule_path]
                         setattr(module, name, original_module)
-                        self.logger.info(
+                        logger.info(
                             f"Restored '{submodule_path}' to original {self.target_module_name}."
                         )
                     else:
-                        self.logger.warning(
+                        logger.warning(
                             f"Found a wrapped submodule '{submodule_path}' but no original stored. Skipping."
                         )
                 else:

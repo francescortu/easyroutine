@@ -31,6 +31,43 @@ def sublist(old, new):
         all_values.append(new)
     return all_values
 
+
+
+def aggregate_last_layernorm(old, new):
+    """
+    Aggregates `last_layernorm` values by concatenating along the first dimension.
+    
+    Args:
+        old (dict): Previous stored dictionary, where each value is a tensor of shape [m, N].
+        new (dict): New incoming dictionary, where each value is a tensor of shape [1, N].
+
+    Returns:
+        dict: Aggregated dictionary where each value is a tensor of shape [m+1, N].
+    """
+    if old is None:
+        return new  # If there's no existing data, just return the new one.
+
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        raise TypeError("Both old and new values must be dictionaries.")
+
+    aggregated = {}
+    for key in new:
+        if key not in old:
+            aggregated[key] = new[key]  # If key is new, just add it.
+        else:
+            if not isinstance(old[key], torch.Tensor) or not isinstance(new[key], torch.Tensor):
+                raise TypeError(f"Values for key {key} must be tensors.")
+
+            if old[key].shape[-1] != new[key].shape[-1]:
+                raise ValueError(f"Tensor shape mismatch for key {key}: "
+                                 f"{old[key].shape} vs {new[key].shape}")
+
+            # Concatenate along the first dimension
+            aggregated[key] = torch.cat([old[key], new[key]], dim=0)
+
+    return aggregated
+
+
 class ValueWithInfo:
     """
     A thin wrapper around a value that also stores extra info.
@@ -69,16 +106,18 @@ class ActivationCache:
             re.compile(r"attn_in_\d+"),
             re.compile(r"attn_out_\d+"),
             re.compile(r"avg_attn_pattern_L\dH\d+"),
-            re.compile(r"pattern_L\dH\d+"),
+            re.compile(r"pattern_L\dH+\d+"),
             re.compile(r"values_\d+"),
             re.compile(r"input_ids"),
             re.compile(r"mapping_index"),
             re.compile(r"mlp_out_\d+"),
+            re.compile(r"last_layernorm")
         )
         self.aggregation_strategies = {}
         # Register default aggregators for some keys
         self.register_aggregation("mapping_index", just_old)
         self.register_aggregation("offset", sublist)
+        self.register_aggregation("last_layernorm", aggregate_last_layernorm)
         self.deferred_cache = False
 
     def __repr__(self) -> str:
@@ -150,6 +189,11 @@ class ActivationCache:
         for key, value in self.cache.items():
             if hasattr(value, "to"):
                 self.cache[key] = value.to(device)
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    if hasattr(v, "to"):
+                        value[k] = v.to(device)
+                self.cache[key] = value
 
     def cpu(self):
         self.to("cpu")

@@ -697,7 +697,7 @@ class HookedModel:
         if extraction_config.extract_last_layernorm:
             hooks += [
                 {
-                    "component": self.model_config.last_layernorm,
+                    "component": self.model_config.last_layernorm_hook_name,
                     "intervention": partial(
                         layernom_hook,
                         cache=cache,
@@ -1098,6 +1098,10 @@ class HookedModel:
                         hook_function, with_kwargs=True
                     )
                 )
+            else:
+                logger.warning(
+                    f"Warning: the last module of the component {component} is not 'input' or 'output'. We will skip this hook"
+                )
 
         return hook_handlers
 
@@ -1218,7 +1222,7 @@ class HookedModel:
             attn_pattern.register_aggregation(kwargs["register_aggregation"][0], kwargs["register_aggregation"][1])
             
         
-        example_dict = {}
+        # example_dict = {}
         n_batches = 0  # Initialize batch counter
 
         for batch in tqdm(dataloader, total=len(dataloader), desc="Extracting cache:"):
@@ -1240,7 +1244,7 @@ class HookedModel:
                 **kwargs,
             )
             # possible memory leak from here -___--------------->
-            additional_dict = batch_saver(others)
+            additional_dict = batch_saver(others) #TODO: Maybe keep the batch_saver in a different cache
             if additional_dict is not None:
                 # cache = {**cache, **additional_dict}
                 cache.update(additional_dict)
@@ -1260,7 +1264,7 @@ class HookedModel:
             "Forward pass finished - started to aggregate different batch"
         )
         all_cache.update(attn_pattern)
-        all_cache["example_dict"] = example_dict
+        # all_cache["example_dict"] = example_dict
         # logger.info("HookedModel: Aggregation finished")
 
         torch.cuda.empty_cache()

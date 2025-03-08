@@ -11,7 +11,7 @@ from easyroutine.interpretability.module_wrappers.base import (
     BaseAttentionWrapper,
     AttentionMatrixHookModule,
 )
-from easyroutine.logger import LambdaLogger
+
 
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]

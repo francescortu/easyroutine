@@ -87,7 +87,7 @@ def compute_statistics(tensor, dim=-1, keepdim=True, eps=1e-6):
     second_moment = tensor.pow(2).mean(dim=dim, keepdim=keepdim)  # Compute second moment
     variance = second_moment - mean.pow(2)  # Compute variance using E[X²] - (E[X])²
 
-    return mean, variance, second_moment
+    return mean.squeeze(-1), variance.squeeze(-1), second_moment.squeeze(-1)
 
 def layernom_hook(module,args,kwargs,output,token_indexes,cache,cache_key, avg: bool = False):
     b = process_args_kwargs_output(args, kwargs, output)
