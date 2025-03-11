@@ -114,7 +114,7 @@ class ModuleWrapperManager:
             module (nn.Module): The current module to inspect.
             parent_path (str): A string that tracks the 'path' of this submodule in the overall model hierarchy.
             mode (str): Either "substitute" or "restore".
-        """
+        """ 
         for name, child in list(module.named_children()):
             # Identify the submodule path (e.g. "encoder.layer.0.attention")
             submodule_path = f"{parent_path}.{name}" if parent_path else name
@@ -128,7 +128,7 @@ class ModuleWrapperManager:
                     wrapped_module = self.attention_wrapper_class(child)
                     setattr(module, name, wrapped_module)
 
-                    logger.info(
+                    logger.debug(
                         f"Substituted '{submodule_path}' with wrapper for {self.target_module_name}."
                     )
                 else:
@@ -145,7 +145,7 @@ class ModuleWrapperManager:
                             f"Restored '{submodule_path}' to original {self.target_module_name}."
                         )
                     else:
-                        logger.warning(
+                        logger.debug(
                             f"Found a wrapped submodule '{submodule_path}' but no original stored. Skipping."
                         )
                 else:

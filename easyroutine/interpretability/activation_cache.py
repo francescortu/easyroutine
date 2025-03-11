@@ -128,7 +128,7 @@ class ActivationCache:
 
     def __setitem__(self, key: str, value):
         if not any(pattern.match(key) for pattern in self.valid_keys):
-            logger.warning(
+            logger.debug(
                 f"Invalid key: {key}. Valid keys are: {self.valid_keys}. Could be a user-defined key."
             )
         self.cache[key] = value
