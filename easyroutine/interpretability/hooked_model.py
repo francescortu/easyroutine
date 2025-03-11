@@ -9,12 +9,13 @@ from easyroutine.interpretability.models import (
 )
 from easyroutine.interpretability.token_index import TokenIndex
 from easyroutine.interpretability.activation_cache import ActivationCache
+from easyroutine.interpretability.interventions import Intervention, InterventionManager
 from easyroutine.interpretability.utils import get_attribute_by_name
 from easyroutine.interpretability.module_wrappers.manager import ModuleWrapperManager
 from easyroutine.logger import logger
 from tqdm import tqdm
 from dataclasses import dataclass
-from easyroutine.interpretability.ablation import AblationManager
+# from easyroutine.interpretability.ablation import AblationManager
 
 # from src.model.emu3.
 from easyroutine.interpretability.utils import (
@@ -165,6 +166,7 @@ class HookedModel:
         )
         self.base_model = None
         self.module_wrapper_manager = ModuleWrapperManager(model=self.hf_model)
+        self.intervention_manager = InterventionManager(model_config = self.model_config)
 
         tokenizer, processor = TokenizerFactory.load_tokenizer(
             model_name=config.model_name,
@@ -416,8 +418,7 @@ class HookedModel:
         token_dict: Dict,
         # string_tokens: List[str],
         extraction_config: ExtractionConfig = ExtractionConfig(),
-        patching_queries: Optional[Union[dict, pd.DataFrame]] = None,
-        ablation_queries: Optional[dict] = None,
+        interventions: Optional[List[Intervention]] = None,
         batch_idx: Optional[int] = None,
         external_cache: Optional[ActivationCache] = None,
     ):
@@ -707,97 +708,12 @@ class HookedModel:
                     ),
                 }
             ]
-        # PATCHING
-        if patching_queries:
-            token_to_pos = partial(
-                map_token_to_pos,
-                _get_token_index=token_dict,
-                # string_tokens=string_tokens,
-                hf_tokenizer=self.hf_tokenizer,
-                inputs=inputs,
+        # ABLATION AND PATCHING
+        if interventions is not None:
+            hooks += self.intervention_manager.create_intervention_hooks(
+                interventions=interventions, 
+                token_dict=token_dict
             )
-            patching_queries = preprocess_patching_queries(
-                patching_queries=patching_queries,
-                map_token_to_pos=token_to_pos,
-                model_config=self.model_config,
-            )
-
-            def make_patch_tokens_hook(patching_queries_subset):
-                """
-                Creates a hook function to patch the activations in the
-                current forward pass.
-                """
-
-                def patch_tokens_hook(
-                    module, args, kwargs, output
-                ):  # TODO: Move to hook.py
-                    b = process_args_kwargs_output(args, kwargs, output)
-                    # Modify the tensor without affecting the computation graph
-                    act_to_patch = b.detach().clone()
-                    for pos, patch in zip(
-                        patching_queries_subset["pos_token_to_patch"],
-                        patching_queries_subset["patching_activations"],
-                    ):
-                        act_to_patch[0, pos, :] = patching_queries_subset[
-                            "patching_activations"
-                        ].values[0]
-
-                    if output is None:
-                        if isinstance(input, tuple):
-                            return (act_to_patch, *input[1:])
-                        elif input is not None:
-                            return act_to_patch
-                    else:
-                        if isinstance(output, tuple):
-                            return (act_to_patch, *output[1:])
-                        elif output is not None:
-                            return act_to_patch
-                    raise ValueError("No output or input found")
-
-                return patch_tokens_hook
-
-            # Group the patching queries by 'layer' and 'act_type'
-            grouped_queries = patching_queries.groupby(["layer", "activation_type"])
-
-            for (layer, act_type), group in grouped_queries:
-                hook_name_template = self.act_type_to_hook_name.get(
-                    act_type[:-3]
-                )  # -3 because we remove {}
-                if not hook_name_template:
-                    raise ValueError(f"Unknown activation type: {act_type}")
-                    # continue  # Skip unknown activation types
-
-                hook_name = hook_name_template.format(layer)
-                hook_function = partial(make_patch_tokens_hook(group))
-
-                hooks.append(
-                    {
-                        "component": hook_name,
-                        "intervention": hook_function,
-                    }
-                )
-
-        if ablation_queries is not None:
-            # TODO: debug and test the ablation. Check with ale
-            token_to_pos = partial(
-                map_token_to_pos,
-                _get_token_index=token_dict,
-                # string_tokens=string_tokens,
-                hf_tokenizer=self.hf_tokenizer,
-                inputs=inputs,
-            )
-            if self.config.batch_size > 1:
-                raise ValueError("Ablation is not supported with batch size > 1")
-            ablation_manager = AblationManager(
-                model_config=self.model_config,
-                token_to_pos=token_to_pos,
-                inputs=inputs,
-                model_attn_type=self.config.attn_implementation,
-                ablation_queries=pd.DataFrame(ablation_queries)
-                if isinstance(ablation_queries, dict)
-                else ablation_queries,
-            )
-            hooks.extend(ablation_manager.main())
 
         if extraction_config.extract_head_values_projected:
             hooks += [
@@ -880,7 +796,15 @@ class HookedModel:
 
             # if additional hooks are not empty, add them to the hooks list
         if self.additional_hooks:
-            hooks += self.additional_hooks
+            for hook in self.additional_hooks:
+                hook["intervention"] = partial(
+                    hook["intervention"],
+                    cache=cache,
+                    token_indexes=token_indexes,
+                    token_dict=token_dict,
+                    **hook["intervention"],
+                )
+                hooks.append(hook)
         return hooks
 
     @torch.no_grad()
@@ -895,8 +819,7 @@ class HookedModel:
         ] = ["last"],
         pivot_positions: Optional[List[int]] = None,
         extraction_config: ExtractionConfig = ExtractionConfig(),
-        ablation_queries: Optional[List[dict]] = None,
-        patching_queries: Optional[List[dict]] = None,
+        interventions: Optional[List[Intervention]] = None,
         external_cache: Optional[ActivationCache] = None,
         # attn_heads: Union[list[dict], Literal["all"]] = "all",
         batch_idx: Optional[int] = None,
@@ -961,8 +884,7 @@ class HookedModel:
             token_indexes=token_indexes,
             cache=cache,
             extraction_config=extraction_config,
-            ablation_queries=ablation_queries,
-            patching_queries=patching_queries,
+            interventions=interventions,
             batch_idx=batch_idx,
             external_cache=external_cache,
         )
@@ -1245,7 +1167,7 @@ class HookedModel:
             # possible memory leak from here -___--------------->
             additional_dict = batch_saver(others) #TODO: Maybe keep the batch_saver in a different cache
             if additional_dict is not None:
-                # cache = {**cache, **additional_dict}
+                # cache = {**cache, **additional_dict}if a
                 cache.update(additional_dict)
 
             if move_to_cpu_after_forward:
@@ -1418,8 +1340,8 @@ class HookedModel:
             )
 
             requested_position_to_extract = []
+            interventions = []
             for query in patching_query:
-                query["patching_activations"] = base_cache
                 if (
                     query["patching_elem"].split("@")[1]
                     not in requested_position_to_extract
@@ -1427,9 +1349,24 @@ class HookedModel:
                     requested_position_to_extract.append(
                         query["patching_elem"].split("@")[1]
                     )
-                query["base_activation_index"] = base_cache["mapping_index"][
-                    query["patching_elem"].split("@")[1]
-                ]
+                interventions.extend([
+                    Intervention(
+                        intervention_type="full",
+                        activation=query["activation_type"].format(layer),
+                        intervention_token_positions=[query["patching_elem"].split("@")[1]],
+                        patching_values=base_cache[query["activation_type"].format(layer)]
+                        .detach()
+                        .clone(),
+                    ) for layer in query["layers_to_patch"]
+                ])
+
+                
+                
+                # query["patching_activations"] = base_cache
+                #     )
+                # query["base_activation_index"] = base_cache["mapping_index"][
+                #     query["patching_elem"].split("@")[1]
+                # ]
 
             # second forward pass to extract the clean logits
             target_clean_cache = self.forward(

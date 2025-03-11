@@ -283,3 +283,25 @@ class AblationManager:
         ablation_queries.drop(columns=["elem-to-ablate"], inplace=True)
         hooks = self._create_hooks_list(AblationType.FLASH_ATTN, ablation_queries)
         return hooks
+
+
+
+
+###
+# def columns_attn_mat(
+# intervention:
+# token_dict: dict,
+# ):
+#     ablation_queries = ablation_queries.copy()
+#     keys = self.token_to_pos(token=ablation_queries["elem-to-ablate"].values[0])
+#     ablation_queries["keys"] = [keys] * len(ablation_queries)
+#     ablation_queries["queries"] = [self.token_to_pos(token="@all")] * len(
+#         ablation_queries
+#     )
+    
+#     keys = self.token_to_pos(token=ablation_queries["elem-to-ablate"].values[0])
+#     queries = self.token_to_pos(token="@all")
+
+#     ablation_queries.drop(columns=["elem-to-ablate"], inplace=True)
+#     hooks = self._create_hooks_list(AblationType.STD, ablation_queries)
+#     return hooks

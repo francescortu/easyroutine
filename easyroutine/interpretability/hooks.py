@@ -2,10 +2,11 @@
 import torch
 from copy import deepcopy
 import pandas as pd
-from typing import List, Callable, Union, Literal
+from typing import List, Callable, Union, Literal, Optional
 from einops import rearrange, einsum
 from easyroutine.interpretability.utils import repeat_kv, get_module_by_path
 from easyroutine.interpretability.activation_cache import ActivationCache
+from easyroutine.logger import logger
 from functools import partial
 import re
 import torch.nn as nn
@@ -147,6 +148,26 @@ def save_resid_hook(
         flatten_indexes = [item for sublist in token_indexes for item in sublist]
         cache[cache_key] = b.data.detach().clone()[..., flatten_indexes, :]
 
+def intervention_resid_hook(
+    module,
+    args,
+    kwargs,
+    output,
+    token_indexes,
+    patching_values: Optional[Union[str,torch.Tensor]] = None
+):
+    r"""
+    Hook function to ablate the tokens in the residual stream. It will set to 0 the value vector of the
+    tokens to ablate
+    """
+    b = process_args_kwargs_output(args, kwargs, output)
+    if patching_values is None or patching_values == "ablation":
+        logger.debug("No patching values provided, ablation will be performed on the residual stream")
+        b.data[..., list(token_indexes), :] = 0
+    else:
+        logger.debug("Patching values provided, applying patching values to the residual stream")
+        b.data[..., list(token_indexes), :] = patching_values
+    return b
 
 
 def query_key_value_hook(
@@ -305,20 +326,26 @@ def head_out_hook(
 
         
 
-def zero_ablation(tensor):
+def zero_ablation(tensor, ablation_values):
     r"""
     Set the attention values to zero
     """
-    return torch.zeros_like(tensor)
+    return torch.zeros_like(tensor) + ablation_values
+
 
 
 # b.copy_(attn_matrix)
-def ablate_attn_mat_hook(
+def intervention_attn_mat_hook(
     module,
     args,
     kwargs,
     output,
-    ablation_queries: pd.DataFrame,
+    q_positions,
+    k_positions,
+    head,
+    ablation_values,
+    patching_values: Optional[Union[str,torch.Tensor]] = None
+    # ablation_queries: pd.DataFrame,
 ):
     r"""
     Hook function to ablate the tokens in the attention
@@ -329,13 +356,11 @@ def ablate_attn_mat_hook(
     b = process_args_kwargs_output(args, kwargs, output)
     batch_size, num_heads, seq_len_q, seq_len_k = b.shape
 
-    q_positions = ablation_queries["queries"].iloc[0]
 
     # Used during generation
     if seq_len_q < len(q_positions):
         q_positions = 0
 
-    k_positions = ablation_queries["keys"].iloc[0]
 
     # Create boolean masks for queries and keys
     q_mask = torch.zeros(seq_len_q, dtype=torch.bool, device=b.device)
@@ -349,12 +374,26 @@ def ablate_attn_mat_hook(
 
     # Expand mask to match the dimensions of the attention matrix
     # Shape after expand: (batch_size, num_heads, seq_len_q, seq_len_k)
-    head_mask = (
-        head_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, num_heads, -1, -1)
-    )
+    # head_mask = (
+    #     head_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, num_heads, -1, -1)
+    # )
 
+
+    
+    # select the head
+    # head_mask = head_mask[:, head, :, :]
+
+    if patching_values is None or patching_values == "ablation":
+        logger.debug("No patching values provided, ablation will be performed")
     # Apply the ablation function directly to the attention matrix
-    b[head_mask] = zero_ablation(b[head_mask])
+        b[:,head,head_mask] = zero_ablation(b[:,head,head_mask], ablation_values)
+    
+    else:
+        # Apply the patching values to the attention matrix
+        logger.debug("Patching values provided, applying patching values")
+        logger.debug("Patching values shape: %s. It is expected to have shape seq_len x seq_len", patching_values.shape)
+    
+        b[:,head,head_mask] = patching_values[head_mask] 
     return b
 
 
@@ -401,7 +440,7 @@ def ablate_attn_mat_hook(
 #     return b
 
 
-def ablate_heads_hook(
+def intervention_heads_hook(
     module,
     args,
     kwargs,
