@@ -7,6 +7,7 @@ from easyroutine.interpretability.hooked_model import (
     ExtractionConfig,
 )
 from easyroutine.interpretability.activation_cache import ActivationCache
+from easyroutine.interpretability.interventions import  Intervention
 from PIL import Image
 import numpy as np
 from typing import List
@@ -573,13 +574,14 @@ class BaseHookedModelTestCase(unittest.TestCase):
                 extract_resid_out=True,
                 extract_attn_pattern=True,
             ),
-            ablation_queries=[
-                {
-                    "type": "std",
-                    "elem-to-ablate": "@inputs-partition-0",
-                    "head-layer-couple": [[2, 1]],
-                }
-            ],
+            interventions=[
+                Intervention(
+                    type="columns",
+                    activation="pattern_L1H2",
+                    token_positions = ["inputs-partition-0"],
+                    patching_values = "ablation"
+                )
+            ]
         )
 
         # cache = self.MODEL.forward(
