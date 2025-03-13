@@ -281,6 +281,8 @@ class HookedModel:
     def use_full_model(self):
         if self.processor is not None:
             logger.info("HookedModel: Using full model capabilities")
+            if self.base_model is not None:
+                self.hf_model = self.base_model
         else:
             if self.base_model is not None:
                 self.hf_model = self.base_model
@@ -1081,7 +1083,7 @@ class HookedModel:
             hook_handlers = self.set_hooks(hooks)
 
         inputs = self.input_handler.prepare_inputs(inputs, self.first_device)
-
+        # print(inputs.keys())
         output = self.hf_model.generate(
             **inputs,  # type: ignore
             generation_config=generation_config,

@@ -4,6 +4,8 @@ import torch
 from typing import List, Union, Optional
 import contextlib
 from easyroutine.interpretability.hooked_model import HookedModel, ExtractionConfig
+from easyroutine.interpretability.activation_cache import ActivationCache
+from easyroutine.interpretability.interventions import Intervention
 from datetime import datetime
 from pathlib import Path
 from rich import print
@@ -17,7 +19,7 @@ class ActivationSaver:
     This class is used to save activations in the file system. It is not necessary to use this class directly and it is possible to use just torch.save. However, this class provides a simple interface to save activations in a structured way.
     """
 
-    def __init__(self, base_dir: Union[Path,str], experiment_name: str = "default"):
+    def __init__(self, base_dir: Union[Path, str], experiment_name: str = "default"):
         """
         Arguments:
             - base_dir (Path): The base directory where the activations will be saved.
@@ -25,8 +27,7 @@ class ActivationSaver:
         """
         self.base_dir = Path(base_dir)
         self.exp_name = experiment_name
-        
-        
+
     @classmethod
     def from_env(cls, experiment_name: str = "default"):
         load_dotenv()
@@ -53,18 +54,18 @@ class ActivationSaver:
 
     def save(
         self,
-        activations: Union[torch.Tensor, dict],
+        activations: Union[torch.Tensor, dict, ActivationCache],
         model: HookedModel,
         target_token_positions,
-        pivot_positions,
-        ablation_queries,
-        patching_queries,
+        pivot_positions: Optional[List],
+        interventions: Optional[List[Intervention]],
         extraction_config: ExtractionConfig,
         other_metadata: dict = {},
+        tag: Optional[str] = None,
     ):
         """
         Saves the activations in the file system. The activations can be a tensor or a dictionary of tensors. The metadata is a dictionary that will be saved in a json file. The metadata should contain the following keys. The key are required to impose a structure in the saved activations. The user can add other keys to the metadata.
-        
+
         Arguments:
             - save_time: The time when the activations were saved.
             - experiment_name: The name of the experiment.
@@ -75,46 +76,46 @@ class ActivationSaver:
             - patching_queries: The patching queries used to extract the activations.
             - extraction_config: The extraction config used to extract the activations.
             - other_metadata: Other metadata that the user wants to save.
-        
+
         Returns:
             - save_dir: The directory where the activations were saved, if the user wants to access them later and save other files.
         """
         model_name = model.config.model_name
-        
+
         # First we create the metadata
         metadata = {
+            "tag": tag,
             "save_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "experiment_name": self.exp_name,
             "model_name": model_name,
             "target_token_positions": target_token_positions,
             "pivot_positions": pivot_positions,
-            "ablation_queries": ablation_queries,
-            "patching_queries": patching_queries,
+            "interventions": interventions,
             "extraction_config": extraction_config.to_dict(),
             **other_metadata,
         }
-        
 
         # Now we create the directory where the activations will be saved
-        save_dir = Path(self.base_dir, self.exp_name , model_name.replace("/", "_"))
-        
+        save_dir = Path(self.base_dir, self.exp_name, model_name.replace("/", "_"))
+
         # Then we create the directory where stored the activations. SHould have the time in the name
-        save_dir = Path(save_dir, metadata["save_time"].replace(":", "_").replace(" ", "_"))
-        
+        save_dir = Path(
+            save_dir, metadata["save_time"].replace(":", "_").replace(" ", "_")
+        )
+
         # Now we save the activations
         self.save_object_to_path(activations, metadata, save_dir)
-        
+
         # now we print the path BASE_DIR/{experiment_name}/{model_name}
         print(f"""
 Saving results:
         - Experiment: {self.exp_name},
         - Model Name: {model_name},
 Activations saved in BASE_DIR/{self.exp_name}/{model_name}
-"""
-        )
+""")
         return save_dir
-        
-        
+
+
 class QueryResult:
     """
     Holds the results of a query, including a list of runs with metadata and paths.
@@ -131,12 +132,23 @@ class QueryResult:
 
     def __repr__(self):
         lines = []
+        idx = 0
         for exp_name, model_dir, run_dir, metadata in self.results:
             lines.append(
-                f"Experiment: {exp_name}, Model: {model_dir.name}, Time Folder: {run_dir.name}"
+                f"{idx} - Experiment: {exp_name}, Model: {model_dir.name}, Time Folder: {run_dir.name}"
             )
+            if metadata.get("tag") is not None:
+                lines.append(f"  Tag: {metadata['tag']}")
+            idx += 1
         return "\n".join(lines)
-    
+
+    def __getitem__(self, item):
+        """Allow slicing of query results."""
+        if isinstance(item, slice):
+            new_qr = QueryResult()
+            new_qr.results = self.results[item]
+            return new_qr
+        return self.results[item]
 
     def get_paths(self):
         """
@@ -169,7 +181,9 @@ class QueryResult:
             return None, None
         # Otherwise it must be an int
         else:
-            sorted_runs = sorted(self.results, key=lambda x: x[2].name)  # sort by run_dir name
+            sorted_runs = sorted(
+                self.results, key=lambda x: x[2].name
+            )  # sort by run_dir name
             # convert negative index
             index = time if time >= 0 else len(sorted_runs) + time
             if index < 0 or index >= len(sorted_runs):
@@ -192,17 +206,56 @@ class QueryResult:
             metadata = json.load(f)
         return obj, metadata
 
+    def remove(self, time: Union[str, int]):
+        """
+        Removes an entry by its time string or by index:
+          - If time is a string, we look for an exact match in run_dir.name.
+          - If time is an int (e.g., -1 for the most recent), we select by index from sorted runs.
+        """
+        if not self.results:
+            print("No results to remove.")
+            return
 
-        
+        # Filter if time is string
+        if isinstance(time, str):
+            for exp_name, model_dir, run_dir, metadata in self.results:
+                if run_dir.name == time:
+                    self._remove_run(run_dir)
+                    return
+            print(f"No run found for time={time}.")
+        # Otherwise it must be an int
+        else:
+            sorted_runs = sorted(
+                self.results, key=lambda x: x[2].name
+            )
+            # convert negative index
+            index = time if time >= 0 else len(sorted_runs) + time
+            if index < 0 or index >= len(sorted_runs):
+                print(f"Index out of range: {time}")
+                return
+            chosen_exp, chosen_model, chosen_run, chosen_meta = sorted_runs[index]
+            self._remove_run(chosen_run)
+            
+        # print(f"Removed run at index {index}.")
+        # show the remaining runs
+        print(self)
+    
+    def _remove_run(self, run_dir: Path):
+        """Helper to remove the activation object and metadata from run_dir."""
+        tensor_path = run_dir / "tensor.pt"
+        metadata_path = run_dir / "metadata.json"
+        tensor_path.unlink()
+        metadata_path.unlink()
+        run_dir.rmdir()
 class ActivationLoader:
     """
     This class is used to query the activations saved in the file system. The primary idea is to use this class to search for activations based on some criteria, such model, experiment, run configuration, etc.
     """
-    
+
     def __init__(self, base_dir: Path, experiment_name: str = "default"):
         self.base_dir = Path(base_dir)
         self.exp_name = experiment_name
-        
+
     @classmethod
     def from_env(cls, experiment_name: str = "default"):
         load_dotenv()
@@ -211,20 +264,23 @@ class ActivationLoader:
             raise ValueError("ACTIVATION_BASE_DIR is not set in the environment.")
         base_dir = Path(activation_base_dir)
         return cls(base_dir, experiment_name)
-    
+
     @classmethod
     def from_saver(cls, saver: ActivationSaver):
         return cls(saver.base_dir, saver.exp_name)
-
 
     def query(
         self,
         experiment_name: Optional[str] = None,
         model_name: Optional[str] = None,
-        target_token_positions: Optional[List[int]] = None,
+        target_token_positions: Optional[List[Union[str, int]]] = None,
         pivot_positions: Optional[List[int]] = None,
         save_time: Optional[str] = None,
-        verbose: bool = False
+        custom_keys: Optional[dict] = None,
+        extraction_config: Optional[ExtractionConfig] = None,
+        interventions: Optional[List[Intervention]] = None,
+        verbose: bool = False,
+        tag: Optional[str] = None,  # Added
     ) -> QueryResult:
         """
         Instead of printing, returns a QueryResult object that can be printed or loaded from.
@@ -234,14 +290,21 @@ class ActivationLoader:
             verbose = True
 
         used_experiment_name = experiment_name or self.exp_name
-        all_experiment_dirs = [
-            d for d in self.base_dir.iterdir() if d.is_dir()
-        ]
+        all_experiment_dirs = [d for d in self.base_dir.iterdir() if d.is_dir()]
         if experiment_name:
-            all_experiment_dirs = [d for d in all_experiment_dirs if d.name == used_experiment_name]
+            all_experiment_dirs = [
+                d for d in all_experiment_dirs if d.name == used_experiment_name
+            ]
 
         def list_match(metadata_value, query_list):
             return (query_list is None) or (metadata_value == query_list)
+
+        def match_custom_keys(metadata, ckeys):
+            """Check if all custom key-value pairs match in metadata."""
+            for k, v in ckeys.items():
+                if metadata.get(k) != v:
+                    return False
+            return True
 
         query_result = QueryResult()
 
@@ -264,12 +327,27 @@ class ActivationLoader:
                     with open(metadata_path, "r") as f:
                         metadata = json.load(f)
 
+                    if tag is not None and metadata.get("tag") != tag:
+                        continue
                     if save_time and save_time != metadata.get("save_time"):
                         continue
-                    if not list_match(metadata.get("target_token_positions"), target_token_positions):
+                    if not list_match(
+                        metadata.get("target_token_positions"), target_token_positions
+                    ):
                         continue
                     if not list_match(metadata.get("pivot_positions"), pivot_positions):
                         continue
+                    if custom_keys and not match_custom_keys(metadata, custom_keys):
+                        continue
+                    if extraction_config is not None:
+                        if (
+                            metadata.get("extraction_config")
+                            != extraction_config.to_dict()
+                        ):
+                            continue
+                    if interventions is not None:
+                        if metadata.get("interventions") != interventions:
+                            continue
 
                     query_result.results.append((exp_dir.name, m_dir, r_dir, metadata))
 

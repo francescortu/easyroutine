@@ -7,6 +7,7 @@
 - [ ] Extend the three tutorials
 
 ## Features
+- [ ] Add the metadata in the cache and simply the ActivationSaver if it save a cache object
 - [ ] Extend the intervention to support all the keys 
 - [ ] Add `extract_head_keys_projected` and `extract_head_queries_projected` in the config
 - [ ] Extent the module wrapper to be able to handle multiple modules of the same models (now support only attention)

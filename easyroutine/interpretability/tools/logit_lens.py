@@ -191,7 +191,7 @@ class LogitLens:
                 logits = torch.zeros(batch_size, seq_len, device=act.device)
 
                 for i, direction in enumerate(token_directions):
-                    if isinstance(direction, tuple):
+                    if (isinstance(direction, tuple) or isinstance(direction, list)) and len(direction) == 2:
                         tok1, tok2 = direction
                         direction_vector = self.unembed[tok1] - self.unembed[tok2]
                     else:
