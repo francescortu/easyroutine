@@ -4,15 +4,18 @@ import contextlib
 from easyroutine.logger import logger
 from typing import List, Union
 
-#TODO: Add a method to expand the tensors in the cache adding the target token dimension using the mapping_index key. In this way we can have a tensors of shape (batch_size, target_tokens, num_tokens, hidden_size) and resolve the ambiguity of the target tokens when we have the average. Indeed, now we have a tensor of shape (batch_size, num_tokens, hidden_size) and mapping index map the index of the second dimension to the correct token. However, the second dim could be both single token or multiple tokens averaged. If we add a new dimension, could be easier to understand.
+# TODO: Add a method to expand the tensors in the cache adding the target token dimension using the mapping_index key. In this way we can have a tensors of shape (batch_size, target_tokens, num_tokens, hidden_size) and resolve the ambiguity of the target tokens when we have the average. Indeed, now we have a tensor of shape (batch_size, num_tokens, hidden_size) and mapping index map the index of the second dimension to the correct token. However, the second dim could be both single token or multiple tokens averaged. If we add a new dimension, could be easier to understand.
+
 
 def just_old(old, new):
     """Always return the new value (or if old is None, return new)."""
     return new if old is None else new
 
+
 def just_me(old, new):
     """If no old value, start a list; otherwise, add new to the list."""
     return [new] if old is None else old + new
+
 
 def sublist(old, new):
     """
@@ -32,11 +35,10 @@ def sublist(old, new):
     return all_values
 
 
-
 def aggregate_last_layernorm(old, new):
     """
     Aggregates `last_layernorm` values by concatenating along the first dimension.
-    
+
     Args:
         old (dict): Previous stored dictionary, where each value is a tensor of shape [m, N].
         new (dict): New incoming dictionary, where each value is a tensor of shape [1, N].
@@ -55,12 +57,16 @@ def aggregate_last_layernorm(old, new):
         if key not in old:
             aggregated[key] = new[key]  # If key is new, just add it.
         else:
-            if not isinstance(old[key], torch.Tensor) or not isinstance(new[key], torch.Tensor):
+            if not isinstance(old[key], torch.Tensor) or not isinstance(
+                new[key], torch.Tensor
+            ):
                 raise TypeError(f"Values for key {key} must be tensors.")
 
             if old[key].shape[-1] != new[key].shape[-1]:
-                raise ValueError(f"Tensor shape mismatch for key {key}: "
-                                 f"{old[key].shape} vs {new[key].shape}")
+                raise ValueError(
+                    f"Tensor shape mismatch for key {key}: "
+                    f"{old[key].shape} vs {new[key].shape}"
+                )
 
             # Concatenate along the first dimension
             aggregated[key] = torch.cat([old[key], new[key]], dim=0)
@@ -72,6 +78,7 @@ class ValueWithInfo:
     """
     A thin wrapper around a value that also stores extra info.
     """
+
     __slots__ = ("_value", "_info")
 
     def __init__(self, value, info):
@@ -89,6 +96,7 @@ class ValueWithInfo:
 
     def __repr__(self):
         return f"ValueWithInfo(value={self._value!r}, info={self._info!r})"
+
 
 class ActivationCache:
     """
@@ -111,7 +119,7 @@ class ActivationCache:
             re.compile(r"input_ids"),
             re.compile(r"mapping_index"),
             re.compile(r"mlp_out_\d+"),
-            re.compile(r"last_layernorm")
+            re.compile(r"last_layernorm"),
         )
         self.aggregation_strategies = {}
         # Register default aggregators for some keys
@@ -121,10 +129,16 @@ class ActivationCache:
         self.deferred_cache = False
 
     def __repr__(self) -> str:
-        return f"ActivationCache(`{', '.join(self.cache.keys())}`)"
+        # Skip 'metadata' from the printed keys
+        items = [key for key in self.cache.keys() if key != "metadata"]
+        return f"ActivationCache(`{', '.join(items)}`)"
 
     def __str__(self) -> str:
-        return f"ActivationCache({', '.join([f'{key}: {value}' for key, value in self.cache.items()])})"
+        # Skip 'metadata' from the printed items
+        items = [
+            f"{key}: {value}" for key, value in self.cache.items() if key != "metadata"
+        ]
+        return f"ActivationCache({', '.join(items)})"
 
     def __setitem__(self, key: str, value):
         if not any(pattern.match(key) for pattern in self.valid_keys):
@@ -205,7 +219,9 @@ class ActivationCache:
         """
         Registers a custom aggregation function for keys that start with key_pattern.
         """
-        logger.debug(f"Registering aggregation strategy for keys starting with '{key_pattern}'")
+        logger.debug(
+            f"Registering aggregation strategy for keys starting with '{key_pattern}'"
+        )
         self.aggregation_strategies[key_pattern] = function
 
     def remove_aggregation(self, key_pattern):
@@ -339,3 +355,36 @@ class ActivationCache:
         """
         wrapped = ValueWithInfo(value, info)
         self[key] = wrapped
+
+    def add_metadata(
+        self, target_token_positions, model_name: str, extraction_config, interventions
+    ):
+        """
+        Adds metadata to the cache for future reference.
+        """
+        self.cache["metadata"] = {
+            "target_token_positions": target_token_positions,
+            "model_name": model_name,
+            "extraction_config": extraction_config,
+            "interventions": interventions,
+        }
+
+    def map_to_dict(
+        self, key:str
+    ) -> dict:
+        """
+        Maps the cache values to a dictionary based on mapping_index.
+        """
+        if self.cache[key] is None:
+            logger.error(f"Key {key} not found in cache.")
+        
+        elif not isinstance(self.cache[key], torch.Tensor):
+            logger.error(f"Value for key {key} is not a tensor.")
+        
+        mapping_index = self.cache["mapping_index"]
+        
+        return_dict = {}
+        for key_map,value_map in mapping_index.items():
+            return_dict[key_map] = self.cache[key][:,value_map].squeeze()
+            
+        return return_dict

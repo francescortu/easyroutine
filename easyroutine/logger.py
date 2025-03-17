@@ -84,6 +84,24 @@ def enable_debug_logging():
     for handler in logger.handlers:
         handler.setLevel(logging.DEBUG)
     logger.debug("Debug logging enabled for easyroutine.")
+    
+def enable_info_logging():
+    """
+    Enable info logging for easyroutine. Prints all INFO-level logs.
+    """
+    logger.setLevel(logging.INFO)
+    for handler in logger.handlers:
+        handler.setLevel(logging.INFO)
+    logger.info("Info logging enabled for easyroutine.")
+
+def enable_warning_logging():
+    """
+    Enable warning logging for easyroutine. Prints all WARNING-level logs.
+    """
+    logger.setLevel(logging.WARNING)
+    for handler in logger.handlers:
+        handler.setLevel(logging.WARNING)
+    logger.warning("Warning logging enabled for easyroutine.")
 
 
 def disable_logging():

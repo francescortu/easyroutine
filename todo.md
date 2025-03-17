@@ -16,7 +16,8 @@
 
 ## Refactorings
 - [ ] Refactoring the `HookedModel.compute_patching()` in a cleaner way.
-- [ ] Handling better the shape of the returned tensors in the ActivationCache
+- [ ] Handling better the shape of the returned tensors in the ActivationCache.
+
 - [ ] (low priority) Refactor the python modules to a more intuitive structure
 
 ## Tests
@@ -25,3 +26,4 @@
 - [ ] Expand test for generation
 - [ ] Expand test for edge cases in token index 
 - [ ] Expand test for edge cases in aggregation of ActivationCache
+- [ ] Test ActivatioNCache.map_to_dict()

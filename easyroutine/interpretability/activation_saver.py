@@ -52,12 +52,39 @@ class ActivationSaver:
         with open(metadata_path, "w") as f:
             json.dump(metadata, f)
 
+    def save_cache(self,
+                   cache:ActivationCache,
+                   other_metadata: dict = {},
+                   tag: Optional[str] = None,
+                   ):
+        """
+        Saves the activation cache in the file systems. These methods makes it easier to save the activations cache if the cache contatains the foundamentals metadata already.
+        Arguments:
+            - cache: The activation cache to be saved.
+            - other_metadata: Other metadata that the user wants to save.
+            - tag: A tag that can be used to identify the activations.
+        """
+        # check if the cache has the metadata
+        if cache["metadata"] is None:
+            raise ValueError("The cache does not have the metadata. Please provide the metadata or use the metod ActivationSaver.save().")
+
+        metadata = cache["metadata"]
+        # save the cache
+        self.save(
+            cache,
+            metadata["model_name"],
+            metadata["target_token_positions"],
+            metadata["interventions"],
+            metadata["extraction_config"],
+            other_metadata,
+            tag,
+        )
+
     def save(
         self,
         activations: Union[torch.Tensor, dict, ActivationCache],
         model: HookedModel,
         target_token_positions,
-        pivot_positions: Optional[List],
         interventions: Optional[List[Intervention]],
         extraction_config: ExtractionConfig,
         other_metadata: dict = {},
@@ -89,7 +116,6 @@ class ActivationSaver:
             "experiment_name": self.exp_name,
             "model_name": model_name,
             "target_token_positions": target_token_positions,
-            "pivot_positions": pivot_positions,
             "interventions": interventions,
             "extraction_config": extraction_config.to_dict(),
             **other_metadata,

@@ -818,7 +818,7 @@ class HookedModel:
             List[str],
             List[int],
             List[Tuple[int, int]],
-        ] = ["last"],
+        ] = ["all"],
         pivot_positions: Optional[List[int]] = None,
         extraction_config: ExtractionConfig = ExtractionConfig(),
         interventions: Optional[List[Intervention]] = None,
@@ -902,7 +902,11 @@ class HookedModel:
             # output_attentions=extract_attn_pattern,
         )
 
-        cache["logits"] = output.logits[:, -1]
+        # save the logit of the target_token_positions
+        flatten_target_token_positions = [
+            item for sublist in token_indexes for item in sublist
+        ]
+        cache["logits"] = output.logits[:, flatten_target_token_positions, :]
         # since attention_patterns are returned in the output, we need to adapt to the cache structure
         if move_to_cpu:
             cache.cpu()
@@ -946,7 +950,7 @@ class HookedModel:
 
     def predict(self, k=10, **kwargs):
         out = self.forward(**kwargs)
-        logits = out["logits"]
+        logits = out["logits"][:,-1,:]
         probs = torch.softmax(logits, dim=-1)
         probs = probs.squeeze()
         topk = torch.topk(probs, k)
@@ -1105,6 +1109,8 @@ class HookedModel:
             List[int],
             List[Tuple[int, int]],
         ],
+        extraction_config: ExtractionConfig = ExtractionConfig(),
+        interventions: Optional[List[Intervention]] = None,
         batch_saver: Callable = lambda x: None,
         move_to_cpu_after_forward: bool = True,
         # save_other_batch_elements: bool = False,
@@ -1164,6 +1170,8 @@ class HookedModel:
                 pivot_positions=batch.get("pivot_positions", None),
                 external_cache=attn_pattern,
                 batch_idx=n_batches,
+                extraction_config=extraction_config,
+                interventions=interventions,
                 **kwargs,
             )
             # possible memory leak from here -___--------------->
@@ -1191,6 +1199,15 @@ class HookedModel:
         # logger.info("HookedModel: Aggregation finished")
 
         torch.cuda.empty_cache()
+        
+        # add a metadata field to the cache
+        all_cache.add_metadata(
+            target_token_positions = target_token_positions,
+            model_name = self.config.model_name,
+            extraction_config = extraction_config,
+            interventions = interventions,
+        )
+        
         return all_cache
 
     @torch.no_grad()
@@ -1353,9 +1370,9 @@ class HookedModel:
                     )
                 interventions.extend([
                     Intervention(
-                        intervention_type="full",
+                        type="full",
                         activation=query["activation_type"].format(layer),
-                        intervention_token_positions=[query["patching_elem"].split("@")[1]],
+                        token_positions=[query["patching_elem"].split("@")[1]],
                         patching_values=base_cache[query["activation_type"].format(layer)]
                         .detach()
                         .clone(),
