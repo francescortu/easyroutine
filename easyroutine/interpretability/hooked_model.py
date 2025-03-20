@@ -1008,7 +1008,7 @@ class HookedModel:
             try:
                 self.assert_module_exists(component)
             except ValueError as e:
-                logger.warning(
+                logger.error(
                     f"Error: {e}. Probably the module {component} do not exists in the model. If the module is the attention_matrix_hook, try callig HookedModel.set_custom_hooks() or setting attn_implementation == 'custom_eager'.  Now we will skip the hook for the component {component}"
                 )
                 continue
@@ -1204,7 +1204,7 @@ class HookedModel:
         all_cache.add_metadata(
             target_token_positions = target_token_positions,
             model_name = self.config.model_name,
-            extraction_config = extraction_config,
+            extraction_config = extraction_config.to_dict(),
             interventions = interventions,
         )
         

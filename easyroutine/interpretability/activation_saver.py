@@ -11,6 +11,7 @@ from pathlib import Path
 from rich import print
 import json
 from dotenv import load_dotenv
+import shutil
 import os
 
 
@@ -27,6 +28,9 @@ class ActivationSaver:
         """
         self.base_dir = Path(base_dir)
         self.exp_name = experiment_name
+        
+    def __repr__(self):
+        return f"ActivationSaver(base_dir={self.base_dir}, experiment_name={self.exp_name})"
 
     @classmethod
     def from_env(cls, experiment_name: str = "default"):
@@ -107,7 +111,13 @@ class ActivationSaver:
         Returns:
             - save_dir: The directory where the activations were saved, if the user wants to access them later and save other files.
         """
-        model_name = model.config.model_name
+        if isinstance(model, HookedModel):
+            model_name = model.config.model_name
+        else:
+            model_name = model
+            
+        if not isinstance(extraction_config, dict):
+            extraction_config = extraction_config.to_dict()
 
         # First we create the metadata
         metadata = {
@@ -117,7 +127,7 @@ class ActivationSaver:
             "model_name": model_name,
             "target_token_positions": target_token_positions,
             "interventions": interventions,
-            "extraction_config": extraction_config.to_dict(),
+            "extraction_config": extraction_config,
             **other_metadata,
         }
 
@@ -140,6 +150,42 @@ Saving results:
 Activations saved in BASE_DIR/{self.exp_name}/{model_name}
 """)
         return save_dir
+    
+    def rename_experiment(self, new_experiment_name: str):
+        """
+        Renames the experiment by moving the directory and updating the metadata in each run.
+        """
+        old_exp_dir = self.base_dir / self.exp_name
+        new_exp_dir = self.base_dir / new_experiment_name
+
+        if not old_exp_dir.exists():
+            raise FileNotFoundError(f"Experiment folder '{self.exp_name}' does not exist.")
+        if new_exp_dir.exists():
+            raise FileExistsError(f"Target experiment folder '{new_experiment_name}' already exists.")
+
+        try:
+            # Rename (or move) the entire experiment directory
+            shutil.move(str(old_exp_dir), str(new_exp_dir))
+            print(f"Experiment folder renamed from '{self.exp_name}' to '{new_experiment_name}'.")
+
+            # Iterate over all model directories and run directories to update metadata files
+            for model_dir in new_exp_dir.iterdir():
+                if model_dir.is_dir():
+                    for run_dir in model_dir.iterdir():
+                        metadata_path = run_dir / "metadata.json"
+                        if metadata_path.exists():
+                            with open(metadata_path, "r") as f:
+                                metadata = json.load(f)
+                            # Update the experiment name in the metadata
+                            metadata["experiment_name"] = new_experiment_name
+                            with open(metadata_path, "w") as f:
+                                json.dump(metadata, f, indent=4)
+            # Update the instance variable so further saves use the new experiment name
+            self.exp_name = new_experiment_name
+        except Exception as e:
+            print("Error during renaming:", e)
+            # Optionally, implement a rollback mechanism here.
+            raise
 
 
 class QueryResult:
@@ -273,6 +319,77 @@ class QueryResult:
         tensor_path.unlink()
         metadata_path.unlink()
         run_dir.rmdir()
+            
+    def update_run_experiment(
+        self, 
+        identifier: Union[int, str], 
+        new_experiment_name: str
+    ):
+        """
+        Finds a run (by index or by run folder name) within the QueryResult,
+        moves it to a new experiment folder, and updates its metadata accordingly.
+
+        The base_dir is automatically derived from the run folder structure.
+        
+        Parameters:
+        - identifier: Either an integer index (e.g. -1 for the most recent)
+                        or a string matching the run folder name.
+        - new_experiment_name: The new experiment name to assign to the run.
+        """
+        import shutil  # in case it's not imported already
+
+        # Locate the run using the identifier
+        if isinstance(identifier, int):
+            # Sort runs by run directory name (assuming name contains the timestamp)
+            sorted_runs = sorted(self.results, key=lambda x: x[2].name)
+            index = identifier if identifier >= 0 else len(sorted_runs) + identifier
+            if index < 0 or index >= len(sorted_runs):
+                print(f"Index out of range: {identifier}")
+                return
+            old_exp_name, model_dir, run_dir, metadata = sorted_runs[index]
+        else:  # identifier is a string, match run_dir.name exactly
+            for exp_name, model_dir, run_dir, metadata in self.results:
+                if run_dir.name == identifier:
+                    old_exp_name = exp_name
+                    break
+            else:
+                print(f"No run found with identifier: {identifier}")
+                return
+
+        # Derive the base directory from the run folder structure:
+        # run_dir is assumed to be: base_dir / old_experiment / model_name / time_folder
+        base_dir = run_dir.parent.parent.parent
+
+        # Construct new paths:
+        # New structure: base_dir / new_experiment / model_name / time_folder
+        new_experiment_dir = base_dir / new_experiment_name
+        new_model_dir = new_experiment_dir / model_dir.name
+        new_run_dir = new_model_dir / run_dir.name
+
+        # Ensure that the new directory exists
+        new_run_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Move the run folder to the new experiment folder
+            shutil.move(str(run_dir), str(new_run_dir))
+            print(f"Moved run from {run_dir} to {new_run_dir}")
+
+            # Update the metadata file in the moved run folder
+            metadata_path = new_run_dir / "metadata.json"
+            if metadata_path.exists():
+                with open(metadata_path, "r") as f:
+                    data = json.load(f)
+                data["experiment_name"] = new_experiment_name  # update the experiment name
+                with open(metadata_path, "w") as f:
+                    json.dump(data, f, indent=4)
+                print(f"Updated metadata for run '{new_run_dir.name}' with experiment name '{new_experiment_name}'.")
+            else:
+                print("Metadata file not found in the run directory.")
+
+        except Exception as e:
+            print("An error occurred while updating the run:", e)
+
+        
 class ActivationLoader:
     """
     This class is used to query the activations saved in the file system. The primary idea is to use this class to search for activations based on some criteria, such model, experiment, run configuration, etc.
@@ -281,7 +398,7 @@ class ActivationLoader:
     def __init__(self, base_dir: Path, experiment_name: str = "default"):
         self.base_dir = Path(base_dir)
         self.exp_name = experiment_name
-
+ 
     @classmethod
     def from_env(cls, experiment_name: str = "default"):
         load_dotenv()
