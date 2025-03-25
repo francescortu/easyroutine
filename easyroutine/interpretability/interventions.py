@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Literal, Union, Optional
+from typing import Any, Dict, List, Literal, Union, Optional, Tuple
 import torch
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -28,10 +28,10 @@ class Intervention:
     """
 
     type: Literal[
-        "columns", "rows", "full", "block-img-txt", "block-img-img", "keep-self-attn"
+        "columns", "rows", "full", "block-img-txt", "block-img-img", "keep-self-attn", "grid"
     ]
     activation: str
-    token_positions: List[Union[str, int]]
+    token_positions: Union[List[Union[str, int]], Tuple[List[str], List[str]]]
     patching_values: Optional[Union[torch.Tensor, Literal["ablation"]]] = None
     ablation_values: float = 0.0
 
@@ -180,7 +180,7 @@ def block_img_txt_attn_mat(hook_name, intervention, token_dict):
 def intervention_resid_full(hook_name, intervention, token_dict):
     # compute the pre-hooks information and return the hook_func
     target_positions = []
-    for token in intervention["target_tokens"]:
+    for token in intervention["target_positions"]:
         target_positions.extend(token_dict[token])
 
     return {
