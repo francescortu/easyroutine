@@ -9,6 +9,10 @@ models:
   hf-internal-testing/tiny-random-LlamaForCausalLM: [null, null, null]
   llava-hf/llava-v1.6-mistral-7b-hf: ["<image>", null, "<image>"]
   ChoereForAI/aya-101: [null, null, null]
+  google/gemma-3-1b-it: ["<start_of_image>", null, "<end_of_image>"]
+  google/gemma-3-4b-it:  ["<start_of_image>", null, "<end_of_image>"]
+  google/gemma-3-12b-it:  ["<start_of_image>", null, "<end_of_image>"]
+  google/gemma-3-27b-it:  ["<start_of_image>", null, "<end_of_image>"]
 
 token_position:
   - last
