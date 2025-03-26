@@ -78,6 +78,7 @@ class ModelConfig:
     num_key_value_groups: int
     head_dim: int
     layernorm_type: Literal["RMS", "LayerNorm"]
+    
 
 # SPECIFIC MODEL CONFIGURATIONS
 

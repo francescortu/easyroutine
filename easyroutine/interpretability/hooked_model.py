@@ -41,6 +41,17 @@ from easyroutine.interpretability.hooks import (
 from functools import partial
 import pandas as pd
 
+import importlib.resources
+import yaml
+
+def load_config() -> dict:
+    with importlib.resources.open_text(
+        "easyroutine.interpretability.config", "config.yaml"
+    ) as file:
+        return yaml.safe_load(file)
+
+
+yaml_config = load_config()
 
 # to avoid running out of shared memory
 # torch.multiprocessing.set_sharing_strategy("file_system")
@@ -198,6 +209,8 @@ class HookedModel:
         }
         self.additional_hooks = []
         self.assert_all_modules_exist()
+        
+        self.image_placeholder = yaml_config["tokenizer_placeholder"][config.model_name]
 
         if self.config.attn_implementation == "custom_eager":
             logger.info(
@@ -336,6 +349,9 @@ class HookedModel:
 
     def get_last_layernorm(self):
         return get_attribute_by_name(self.hf_model, self.model_config.last_layernorm)
+    
+    def get_image_placeholder(self)->str:
+        return self.image_placeholder
 
     def eval(self):
         r"""

@@ -10,6 +10,17 @@ models:
   llava-hf/llava-v1.6-mistral-7b-hf: ["<image>", null, "<image>"]
   ChoereForAI/aya-101: [null, null, null]
 
+tokenizer_placeholder:
+  facebook/chameleon-7b: "<image>"
+  facebook/chameleon-30b: "<image>"
+  mistral-community/pixtral-12b: "[IMG]"
+  Emu3-Chat: "<|image|>"
+  Emu3-Gen: "<|image|>"
+  Emu3-Stage1: "<|image|>"
+  hf-internal-testing/tiny-random-LlamaForCausalLM: "<image>"
+  llava-hf/llava-v1.6-mistral-7b-hf: "<image>"
+  ChoereForAI/aya-101: "<image>"
+
 token_position:
   - last
   - last-2
