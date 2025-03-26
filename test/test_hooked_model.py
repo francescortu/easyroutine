@@ -734,6 +734,42 @@ class TestHookedLlavaModel(BaseHookedModelTestCase):
 
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
+class TestHookedGemma3Model(BaseHookedModelTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="google/gemma-3-4b-it",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant."}]
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": get_a_random_pil()},
+                    {"type": "text", "text": "Describe this image in detail."}
+                ]
+            }
+        ]
+
+        cls.INPUTS  = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=True,
+            return_dict=True, return_tensors="pt"
+        )
+
+        
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+        
 
 # if __name__ == "__main__":
 #     unittest.main(verbosity=2)

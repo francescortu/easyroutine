@@ -12,6 +12,7 @@ from easyroutine.interpretability.module_wrappers.mistral_attention import (
     MistralAttentionWrapper,
 )
 from easyroutine.interpretability.module_wrappers.T5_attention import T5AttentionWrapper
+from easyroutine.interpretability.module_wrappers.gemma3_attention import Gemma3AttentionWrapper
 from easyroutine.logger import logger
 
 from easyroutine.interpretability.utils import parse_module_path, find_all_modules
@@ -25,7 +26,8 @@ class AttentionWrapperFactory:
                                     ChameleonAttentionWrapper.original_name(): ChameleonAttentionWrapper, 
                                     LlamaAttentionWrapper.original_name(): LlamaAttentionWrapper, 
                                     T5AttentionWrapper.original_name(): T5AttentionWrapper, 
-                                    MistralAttentionWrapper.original_name(): MistralAttentionWrapper 
+                                    MistralAttentionWrapper.original_name(): MistralAttentionWrapper,
+                                    Gemma3AttentionWrapper.original_name(): Gemma3AttentionWrapper,
     }
 
     # MODEL_NAME_TO_WRAPPER = {
@@ -45,6 +47,7 @@ class AttentionWrapperFactory:
         Type[LlamaAttentionWrapper],
         Type[T5AttentionWrapper],
         Type[MistralAttentionWrapper],
+        Type[Gemma3AttentionWrapper],
     ]:
         """
         Returns the attention wrapper class for the specified model name.

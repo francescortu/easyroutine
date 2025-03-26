@@ -12,6 +12,8 @@ from transformers import (
     T5TokenizerFast,
     LlamaTokenizerFast,
     LlavaNextProcessor,
+    Gemma3ForConditionalGeneration,
+    Gemma3Processor,
 )
 import random
 from typing import List, Literal, Union, Dict, Optional, Tuple
@@ -246,6 +248,42 @@ class ModelFactory:
         elif model_name in ["Emu3-Chat", "Emu3-Gen", "Emu3-Stage1"]:
             raise NotImplementedError("Emu3 model not implemented yet")
 
+        elif model_name in ["google/gemma-3-1b-it", "google/gemma-3-4b-it", "google/gemma-3-12b-it", "google/gemma-3-27b-it"]:
+            model = Gemma3ForConditionalGeneration.from_pretrained(
+                model_name,
+                torch_dtype=torch_dtype,
+                device_map=device_map,
+                attn_implementation=attn_implementation,
+            )
+            model_config = ModelConfig(
+                residual_stream_input_hook_name="language_model.model.layers[{}].input",
+                residual_stream_hook_name="language_model.model.layers[{}].output",
+                intermediate_stream_hook_name="language_model.model.layers[{}].post_attention_layernorm.output",
+                residual_stream_input_post_layernorm_hook_name="language_model.model.layers[{}].self_attn.input",
+                head_key_hook_name="language_model.model.layers[{}].self_attn.k_proj.output",
+                head_value_hook_name="language_model.model.layers[{}].self_attn.v_proj.output",
+                head_query_hook_name="language_model.model.layers[{}].self_attn.q_proj.output",
+                attn_out_hook_name="language_model.model.layers[{}].self_attn.o_proj.output",
+                attn_o_proj_input_hook_name="language_model.model.layers[{}].self_attn.o_proj.input",
+                attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
+                attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
+                mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
+                last_layernorm_hook_name="language_model.model.norm.input",
+                attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
+                attn_out_proj_bias="language_model.model.layers[{}].self_attn.o_proj.bias",
+                embed_tokens="language_model.model.embed_tokens.input",
+                unembed_matrix="language_model.lm_head.weight",
+                last_layernorm="language_model.model.norm",
+                num_hidden_layers=model.language_model.config.num_hidden_layers,
+                num_attention_heads=model.language_model.config.num_attention_heads,
+                hidden_size=model.language_model.config.hidden_size,
+                num_key_value_heads=model.language_model.config.num_key_value_heads,
+                num_key_value_groups=model.language_model.config.num_attention_heads // model.language_model.config.num_key_value_heads,
+                head_dim=model.language_model.config.head_dim,
+                layernorm_type="RMS",
+            )
+            language_model = model.language_model
+
         elif model_name in ["hf-internal-testing/tiny-random-LlamaForCausalLM"]:
             model = LlamaForCausalLM.from_pretrained(
                 model_name,
@@ -361,6 +399,13 @@ class TokenizerFactory:
                 device_map=device_map,
             )
             is_a_processor = False
+        elif model_name in ["google/gemma-3-1b-it", "google/gemma-3-4b-it", "google/gemma-3-12b-it", "google/gemma-3-27b-it"]:
+            processor = Gemma3Processor.from_pretrained(
+                model_name,
+                torch_dtype=torch_dtype,
+                device_map=device_map,
+            )
+            is_a_processor = True
         elif model_name in ["mistral-community/pixtral-12b"]:
             processor = PixtralProcessor.from_pretrained(
                 model_name,
@@ -491,6 +536,19 @@ class InputHandler:
                     "attention_mask": batch_dict["attention_mask"],
                     "pixel_values": batch_dict["pixel_values"],
                     "image_sizes": batch_dict["image_sizes"],
+                }
+        elif self.model_name in ["google/gemma-3-1b-it", "google/gemma-3-4b-it", "google/gemma-3-12b-it", "google/gemma-3-27b-it"]:
+            if "pixel_values" not in batch_dict:
+                input_dict = {
+                    "input_ids": batch_dict["input_ids"],
+                    "attention_mask": batch_dict["attention_mask"],
+                }
+            else:
+                input_dict = {
+                    "input_ids": batch_dict["input_ids"],
+                    "attention_mask": batch_dict["attention_mask"],
+                    "pixel_values": batch_dict["pixel_values"],
+                    "token_type_ids": batch_dict["token_type_ids"],
                 }
         elif self.model_name in ["CohereForAI/aya-101"]:
             input_dict = {
