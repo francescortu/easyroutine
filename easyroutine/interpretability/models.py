@@ -81,6 +81,22 @@ class ModelConfig:
     head_dim: int
     layernorm_type: Literal["RMS", "LayerNorm"]
     
+    def use_language_model(self):
+        """
+        for the hook, remove the "language_model" prefix: "language_model.model.layers[{}]" -> "model.layers[{}]" . Remove from the data ckass
+        """
+        # iterate over the dataclass fields
+        for field in self.__dataclass_fields__.keys():
+            # remove the "language_model." prefix
+            if "hook" in field:
+                setattr(self, field, getattr(self, field).replace("language_model.", ""))
+            
+    def restore_full_model(self):
+        for field in self.__dataclass_fields__.keys():
+            if "hook" in field:
+                setattr(self, field, getattr(self, field).replace("model.", "language_model.model."))
+    
+    
 
 # SPECIFIC MODEL CONFIGURATIONS
 
@@ -113,7 +129,7 @@ class ModelFactory:
         attn_implementation: str,
         torch_dtype: torch.dtype,
         device_map: str,
-    ):
+    ) -> Tuple[torch.nn.Module, Optional[torch.nn.Module], ModelConfig]:
         r"""
         Load the model and its configuration based on the model name.
 
@@ -241,6 +257,7 @@ class ModelFactory:
                     head_dim=model.language_model.config.head_dim,
                     layernorm_type="RMS",
                 )
+                    
             else:
                 raise ValueError("Unsupported model_name")
             language_model = model.language_model
@@ -283,6 +300,7 @@ class ModelFactory:
                 layernorm_type="RMS",
             )
             language_model = model.language_model
+
 
         elif model_name in ["hf-internal-testing/tiny-random-LlamaForCausalLM"]:
             model = LlamaForCausalLM.from_pretrained(

@@ -601,14 +601,50 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         self.assertEqual(ablation_cache["pattern_L1H2"][0, :4, :4].sum(), 0)
+    def test_ablation_attn_matrix_lm_only(self):
+        self.MODEL.use_language_model_only()
+        ablation_cache = self.MODEL.forward(
+            inputs={"input_ids": self.INPUTS["input_ids"],"attention_mask": self.INPUTS["attention_mask"]},
+            target_token_positions=["all"],
+            pivot_positions=[4],
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True,
+                extract_attn_pattern=True,
+            ),
+            interventions=[
+                Intervention(
+                    type="columns",
+                    activation="pattern_L1H2",
+                    token_positions = ["inputs-partition-0"],
+                    patching_values = "ablation"
+                )
+            ]
+        )
 
-    def test_patching(self):
-        # TODO: Implement this test
-        pass
+        # cache = self.MODEL.forward(
+        #     self.INPUTS,
+        #     target_token_positions=["last"],
+        #     pivot_positions=[4],
+        #     extraction_config=ExtractionConfig(
+        #         extract_resid_out=True,
+        #         extract_attn_pattern=True,
+        #     )
+        # )
+        # assert that cache["pattern_L1H1"] is in the cache
+        self.assertIn("pattern_L1H1", ablation_cache)
+        # assert that cache["resid_out_0"] has shape (1,self.input_size,self.input_size)
+        self.assertEqual(
+            ablation_cache["pattern_L1H2"].shape, (1, self.input_size, self.input_size)
+        )
+
+        self.assertEqual(ablation_cache["pattern_L1H2"][0, :4, :4].sum(), 0)
 
     def test_token_index(self):
         # TODO: add edge cases for token_index
         pass
+    def test_intervention(self): 
+        pass
+    
 ################### BASE TEST CASES ######################
 class TestHookedTestModel(BaseHookedModelTestCase):
     """

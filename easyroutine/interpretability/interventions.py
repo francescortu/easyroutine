@@ -208,7 +208,7 @@ class InterventionManager:
         model_config: ModelConfig,
     ):
         self.model_config = model_config
-        self._register_interventions()
+
 
     def create_intervention_hooks(self, interventions: List[Intervention], token_dict: dict):
         """
@@ -221,6 +221,8 @@ class InterventionManager:
         Returns:
             - List[Dict[str, Any]]: The list of hooks to be applied to the model
         """
+        self._register_interventions() # Register the interventions. Here to support dynamical model_config changes
+        
         hooks = []
         for intervention in interventions:
             type_str = intervention["activation"]

@@ -208,6 +208,7 @@ class HookedModel:
             # Add other act_types if needed
         }
         self.additional_hooks = []
+        self.additional_interventions = []
         self.assert_all_modules_exist()
         
         self.image_placeholder = yaml_config["tokenizer_placeholder"][config.model_name]
@@ -296,6 +297,7 @@ class HookedModel:
             logger.info("HookedModel: Using full model capabilities")
             if self.base_model is not None:
                 self.hf_model = self.base_model
+                self.model_config.restore_full_model()
         else:
             if self.base_model is not None:
                 self.hf_model = self.base_model
@@ -307,8 +309,12 @@ class HookedModel:
                 "HookedModel: The model does not have a separate language model that can be used",
             )
         else:
+            # check if we are already using the language model
+            if self.hf_model == self.hf_language_model:
+                return
             self.base_model = self.hf_model
             self.hf_model = self.hf_language_model
+            self.model_config.use_language_model()
             logger.info("HookedModel: Using only language model capabilities")
 
     def get_tokenizer(self):
@@ -426,7 +432,12 @@ class HookedModel:
         return string_tokens
     
 
-
+    def register_interventions(self, interventions: List[Intervention]):
+        self.additional_interventions = interventions
+        logger.info(f"HookedModel: Registered {len(interventions)} interventions")
+        
+    def clean_interventions(self):
+        self.additional_interventions = None
 
     def create_hooks(
         self,
@@ -732,7 +743,11 @@ class HookedModel:
                 interventions=interventions, 
                 token_dict=token_dict
             )
-
+        if self.additional_interventions is not None:
+            hooks += self.intervention_manager.create_intervention_hooks(
+                interventions=self.additional_interventions, 
+                token_dict=token_dict
+            )
         if extraction_config.extract_head_values_projected:
             hooks += [
                 {
@@ -964,7 +979,7 @@ class HookedModel:
         """
         return self.forward(*args, **kwds)
 
-    def predict(self, k=10, **kwargs):
+    def predict(self, k=10, strip:bool = True, **kwargs):
         out = self.forward(**kwargs)
         logits = out["logits"][:,-1,:]
         probs = torch.softmax(logits, dim=-1)
@@ -974,6 +989,8 @@ class HookedModel:
         string_tokens = self.to_string_tokens(topk.indices)
         token_probs = {}
         for token, prob in zip(string_tokens, topk.values):
+            if strip:
+                token = token.strip()
             if token not in token_probs:
                 token_probs[token] = prob.item()
         return token_probs
