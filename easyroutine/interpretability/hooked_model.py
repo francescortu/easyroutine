@@ -298,6 +298,7 @@ class HookedModel:
             if self.base_model is not None:
                 self.hf_model = self.base_model
                 self.model_config.restore_full_model()
+                self.base_model = None
         else:
             if self.base_model is not None:
                 self.hf_model = self.base_model
@@ -402,6 +403,7 @@ class HookedModel:
                 "intervention": hook_function,
             }
         )
+    
 
     def to_string_tokens(
         self,
@@ -437,7 +439,8 @@ class HookedModel:
         logger.info(f"HookedModel: Registered {len(interventions)} interventions")
         
     def clean_interventions(self):
-        self.additional_interventions = None
+        self.additional_interventions = []
+        logger.info(f"HookedModel: Removed {len(self.additional_interventions)} interventions")
 
     def create_hooks(
         self,
@@ -979,7 +982,7 @@ class HookedModel:
         """
         return self.forward(*args, **kwds)
 
-    def predict(self, k=10, strip:bool = True, **kwargs):
+    def predict(self, k=10, strip:bool = True,  **kwargs):
         out = self.forward(**kwargs)
         logits = out["logits"][:,-1,:]
         probs = torch.softmax(logits, dim=-1)

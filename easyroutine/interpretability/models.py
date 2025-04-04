@@ -94,7 +94,7 @@ class ModelConfig:
     def restore_full_model(self):
         for field in self.__dataclass_fields__.keys():
             if "hook" in field:
-                setattr(self, field, getattr(self, field).replace("model.", "language_model.model."))
+                setattr(self, field, getattr(self, field).replace("model.","language_model.model."))
     
     
 

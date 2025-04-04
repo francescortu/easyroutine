@@ -33,7 +33,7 @@ class Intervention:
     activation: str
     token_positions: Union[List[Union[str, int]], Tuple[List[str], List[str]]]
     patching_values: Optional[Union[torch.Tensor, Literal["ablation"]]] = None
-    ablation_values: float = 0.0
+    multiplication_value: float = 0.0
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -92,7 +92,7 @@ def columns_attn_mat(hook_name, intervention:Intervention, token_dict):
             k_positions=keys_intervention_token_position,
             patching_values=intervention.patching_values,
             head=head,
-            ablation_values=intervention.ablation_values
+            multiplication_value=intervention.multiplication_value
         ),
     }
 
@@ -125,7 +125,7 @@ def rows_attn_mat(hook_name, intervention:Intervention, token_dict):
             k_positions=keys_token_positions,
             patching_values=intervention.patching_values,
             head=head,
-            ablation_values=intervention.ablation_values
+            multiplication_value=intervention.multiplication_value
         ),
     }
     
@@ -168,7 +168,7 @@ def grid_attn_mat(hook_name, intervention, token_dict):
             k_positions=keys_token_positions,
             patching_values=intervention.patching_values,
             head=head,
-            ablation_values=intervention.ablation_values
+            multiplication_value=intervention.multiplication_value
         ),
     }
 

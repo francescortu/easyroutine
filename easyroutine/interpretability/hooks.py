@@ -326,11 +326,12 @@ def head_out_hook(
 
         
 
-def zero_ablation(tensor, ablation_values):
+def multiply_pattern(tensor, multiplication_value):
     r"""
     Set the attention values to zero
     """
-    return torch.zeros_like(tensor) + ablation_values
+    # return torch.zeros_like(tensor) + multiplication_value
+    return tensor * multiplication_value
 
 
 
@@ -343,7 +344,7 @@ def intervention_attn_mat_hook(
     q_positions,
     k_positions,
     head,
-    ablation_values,
+    multiplication_value,
     patching_values: Optional[Union[str,torch.Tensor]] = None
     # ablation_queries: pd.DataFrame,
 ):
@@ -386,7 +387,7 @@ def intervention_attn_mat_hook(
     if patching_values is None or patching_values == "ablation":
         logger.debug("No patching values provided, ablation will be performed")
     # Apply the ablation function directly to the attention matrix
-        b[:,head,head_mask] = zero_ablation(b[:,head,head_mask], ablation_values)
+        b[:,head,head_mask] = multiply_pattern(b[:,head,head_mask], multiplication_value)
     
     else:
         # Apply the patching values to the attention matrix
