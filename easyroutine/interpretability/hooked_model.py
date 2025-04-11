@@ -974,7 +974,7 @@ class HookedModel:
 
         assert isinstance(token_indexes, list), "Token index must be a list"
         assert isinstance(token_dict, dict), "Token dict must be a dict"
-
+        
         hooks = self.create_hooks(  # TODO: add **kwargs
             inputs=inputs,
             token_dict=token_dict,
