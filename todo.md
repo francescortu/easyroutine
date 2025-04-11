@@ -1,16 +1,16 @@
 # TODO
 
 ## Documentations
-- [ ] Add logit lens to the docs
-- [ ] Add activation saver to docs + add docstring for activation saver
+- [x] Add logit lens to the docs
+- [x] Add activation saver to docs + add docstring for activation saver
 - [ ] Update the docs string
-- [ ] Extend the three tutorials
+- [x] Extend the three tutorials
 
 ## Features
-- [ ] Add the metadata in the cache and simply the ActivationSaver if it save a cache object
-- [ ] Extend the intervention to support all the keys 
-- [ ] Add `extract_head_keys_projected` and `extract_head_queries_projected` in the config
-- [ ] Extent the module wrapper to be able to handle multiple modules of the same models (now support only attention)
+- [x] Add the metadata in the cache and simply the ActivationSaver if it save a cache object
+- [x] Extend the intervention to support all the keys 
+- [x] Add `extract_head_keys_projected` and `extract_head_queries_projected` in the config
+- [x] Extent the module wrapper to be able to handle multiple modules of the same models (now support only attention)
 
 ## Bugs
 

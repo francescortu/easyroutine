@@ -35,7 +35,7 @@ from easyroutine.interpretability.hooks import (
     process_args_kwargs_output,
     query_key_value_hook,
     head_out_hook,
-    layernom_hook
+    layernom_hook,
 )
 
 from functools import partial
@@ -43,6 +43,7 @@ import pandas as pd
 
 import importlib.resources
 import yaml
+
 
 def load_config() -> dict:
     with importlib.resources.open_text(
@@ -91,7 +92,11 @@ class ExtractionConfig:
         extract_resid_in_post_layernorm(bool): if True, extract the input of the residual stream after the layernorm
         extract_attn_pattern (bool): if True, extract the attention pattern of the attn
         extract_head_values_projected (bool): if True, extract the values vectors projected of the model
+        extract_head_keys_projected (bool): if True, extract the key vectors projected of the model
+        extract_head_queries_projected (bool): if True, extract the query vectors projected of the model
+        extract_head_keys (bool): if True, extract the keys of the attention
         extract_head_values (bool): if True, extract the values of the attention
+        extract_head_queries (bool): if True, extract the queries of the attention
         extract_head_out (bool): if True, extract the output of the heads [DEPRECATED]
         extract_attn_out (bool): if True, extract the output of the attention of the attn_heads passed
         extract_attn_in (bool): if True, extract the input of the attention of the attn_heads passed
@@ -100,7 +105,7 @@ class ExtractionConfig:
         avg (bool): if True, extract the average of the activations over the target positions
         avg_over_example (bool): if True, extract the average of the activations over the examples (it required a external cache to save the running avg)
         attn_heads (Union[list[dict], Literal["all"]]): list of dictionaries with the layer and head to extract the attention pattern or 'all' to
-        attn_pattern_avg (Literal["mean", "sum", "baseline_ratio", "none"]): the type of average to perform over the attention pattern. See hook.py attention_pattern_head for more details 
+        attn_pattern_avg (Literal["mean", "sum", "baseline_ratio", "none"]): the type of average to perform over the attention pattern. See hook.py attention_pattern_head for more details
         attn_pattern_row_positions (Optional[Union[List[int], List[Tuple], List[str], List[Union[int, Tuple, str]]]): the row positions of the attention pattern to extract. See hook.py attention_pattern_head for more details
     """
 
@@ -110,8 +115,8 @@ class ExtractionConfig:
     extract_resid_in_post_layernorm: bool = False
     extract_attn_pattern: bool = False
     extract_head_values_projected: bool = False
-    # TODO: add extract_head_queries_projected
-    # TODO: add extract_head_keys_projected
+    extract_head_keys_projected: bool = False
+    extract_head_queries_projected: bool = False
     extract_head_keys: bool = False
     extract_head_values: bool = False
     extract_head_queries: bool = False
@@ -140,6 +145,8 @@ class ExtractionConfig:
                 self.extract_resid_out,
                 self.extract_attn_pattern,
                 self.extract_head_values_projected,
+                self.extract_head_keys_projected,
+                self.extract_head_queries_projected,
                 self.extract_head_keys,
                 self.extract_head_values,
                 self.extract_head_queries,
@@ -156,6 +163,7 @@ class ExtractionConfig:
     def to_dict(self):
         return self.__dict__
 
+
 class HookedModel:
     """
     This class is a wrapper around the huggingface model that allows to extract the activations of the model. It is support
@@ -163,7 +171,6 @@ class HookedModel:
     """
 
     def __init__(self, config: HookedModelConfig, log_file_path: Optional[str] = None):
-
         self.config = config
         self.hf_model, self.hf_language_model, self.model_config = (
             ModelFactory.load_model(
@@ -177,7 +184,7 @@ class HookedModel:
         )
         self.base_model = None
         self.module_wrapper_manager = ModuleWrapperManager(model=self.hf_model)
-        self.intervention_manager = InterventionManager(model_config = self.model_config)
+        self.intervention_manager = InterventionManager(model_config=self.model_config)
 
         tokenizer, processor = TokenizerFactory.load_tokenizer(
             model_name=config.model_name,
@@ -210,7 +217,7 @@ class HookedModel:
         self.additional_hooks = []
         self.additional_interventions = []
         self.assert_all_modules_exist()
-        
+
         self.image_placeholder = yaml_config["tokenizer_placeholder"][config.model_name]
 
         if self.config.attn_implementation == "custom_eager":
@@ -356,8 +363,8 @@ class HookedModel:
 
     def get_last_layernorm(self):
         return get_attribute_by_name(self.hf_model, self.model_config.last_layernorm)
-    
-    def get_image_placeholder(self)->str:
+
+    def get_image_placeholder(self) -> str:
         return self.image_placeholder
 
     def eval(self):
@@ -403,7 +410,6 @@ class HookedModel:
                 "intervention": hook_function,
             }
         )
-    
 
     def to_string_tokens(
         self,
@@ -432,15 +438,16 @@ class HookedModel:
         for tok in tokens:
             string_tokens.append(self.hf_tokenizer.decode(tok))  # type: ignore
         return string_tokens
-    
 
     def register_interventions(self, interventions: List[Intervention]):
         self.additional_interventions = interventions
         logger.info(f"HookedModel: Registered {len(interventions)} interventions")
-        
+
     def clean_interventions(self):
         self.additional_interventions = []
-        logger.info(f"HookedModel: Removed {len(self.additional_interventions)} interventions")
+        logger.info(
+            f"HookedModel: Removed {len(self.additional_interventions)} interventions"
+        )
 
     def create_hooks(
         self,
@@ -460,12 +467,10 @@ class HookedModel:
         Arguments:
             inputs (dict): dictionary with the inputs of the model (input_ids, attention_mask, pixel_values ...)
             cache (ActivationCache): dictionary where the activations of the model will be saved
-            extracted_token_position (list[str]): list of tokens to extract the activations from (["last", "end-image", "start-image", "first"])
-            string_tokens (list[str]): list of string tokens
-            pivot_positions (Optional[list[int]]): list of split positions of the tokens
+            token_indexes (list[str]): list of tokens to extract the activations from (["last", "end-image", "start-image", "first"])
+            token_dict (Dict): dictionary with the token indexes
             extraction_config (ExtractionConfig): configuration of the extraction of the activations of the model (default = ExtractionConfig())
-            ablation_queries (Optional[Union[dict, pd.DataFrame]]): dictionary or dataframe with the ablation queries to perform during forward pass
-            patching_queries (Optional[Union[dict, pd.DataFrame]]): dictionary or dataframe with the patching queries to perform during forward pass
+            interventions (Optional[List[Intervention]]): list of interventions to perform during forward pass
             batch_idx (Optional[int]): index of the batch in the dataloader
             external_cache (Optional[ActivationCache]): external cache to use in the forward pass
 
@@ -743,13 +748,11 @@ class HookedModel:
         # ABLATION AND PATCHING
         if interventions is not None:
             hooks += self.intervention_manager.create_intervention_hooks(
-                interventions=interventions, 
-                token_dict=token_dict
+                interventions=interventions, token_dict=token_dict
             )
         if self.additional_interventions is not None:
             hooks += self.intervention_manager.create_intervention_hooks(
-                interventions=self.additional_interventions, 
-                token_dict=token_dict
+                interventions=self.additional_interventions, token_dict=token_dict
             )
         if extraction_config.extract_head_values_projected:
             hooks += [
@@ -779,15 +782,71 @@ class HookedModel:
                 for i, head in zip(layer_indexes, head_indexes)
             ]
 
+        if extraction_config.extract_head_keys_projected:
+            hooks += [
+                {
+                    "component": self.model_config.head_key_hook_name.format(i),
+                    "intervention": partial(
+                        projected_key_vectors_head,
+                        cache=cache,
+                        token_indexes=token_indexes,
+                        layer=i,
+                        num_attention_heads=self.model_config.num_attention_heads,
+                        num_key_value_heads=self.model_config.num_key_value_heads,
+                        hidden_size=self.model_config.hidden_size,
+                        d_head=self.model_config.head_dim,
+                        out_proj_weight=get_attribute_from_name(
+                            self.hf_model,
+                            f"{self.model_config.attn_out_proj_weight.format(i)}",
+                        ),
+                        out_proj_bias=get_attribute_from_name(
+                            self.hf_model,
+                            f"{self.model_config.attn_out_proj_bias.format(i)}",
+                        ),
+                        head=head,
+                        avg=extraction_config.avg,
+                    ),
+                }
+                for i, head in zip(layer_indexes, head_indexes)
+            ]
+
+        if extraction_config.extract_head_queries_projected:
+            hooks += [
+                {
+                    "component": self.model_config.head_query_hook_name.format(i),
+                    "intervention": partial(
+                        projected_query_vectors_head,
+                        cache=cache,
+                        token_indexes=token_indexes,
+                        layer=i,
+                        num_attention_heads=self.model_config.num_attention_heads,
+                        num_key_value_heads=self.model_config.num_key_value_heads,
+                        hidden_size=self.model_config.hidden_size,
+                        d_head=self.model_config.head_dim,
+                        out_proj_weight=get_attribute_from_name(
+                            self.hf_model,
+                            f"{self.model_config.attn_out_proj_weight.format(i)}",
+                        ),
+                        out_proj_bias=get_attribute_from_name(
+                            self.hf_model,
+                            f"{self.model_config.attn_out_proj_bias.format(i)}",
+                        ),
+                        head=head,
+                        avg=extraction_config.avg,
+                    ),
+                }
+                for i, head in zip(layer_indexes, head_indexes)
+            ]
+
         if extraction_config.extract_attn_pattern:
             if extraction_config.avg_over_example:
                 if external_cache is None:
-                   logger.warning(
+                    logger.warning(
                         """The external_cache is None. The average could not be computed since missing an external cache where store the iterations.
                         """
                     )
                 elif batch_idx is None:
-                   logger.warning(
+                    logger.warning(
                         """The batch_idx is None. The average could not be computed since missing the batch index.
                        
                         """
@@ -808,7 +867,7 @@ class HookedModel:
                                 batch_idx=batch_idx,
                                 cache=cache,
                                 # avg=extraction_config.avg,
-                                extract_avg_value=extraction_config.extract_head_values_projected
+                                extract_avg_value=extraction_config.extract_head_values_projected,
                             ),
                         }
                         for i in range(0, self.model_config.num_hidden_layers)
@@ -824,7 +883,9 @@ class HookedModel:
                             layer=i,
                             head=head,
                             attn_pattern_avg=extraction_config.attn_pattern_avg,
-                            attn_pattern_row_partition = None if extraction_config.attn_pattern_row_positions is None else tuple(token_dict["attn_pattern_row_positions"]),
+                            attn_pattern_row_partition=None
+                            if extraction_config.attn_pattern_row_positions is None
+                            else tuple(token_dict["attn_pattern_row_positions"]),
                         ),
                     }
                     for i, head in zip(layer_indexes, head_indexes)
@@ -910,7 +971,7 @@ class HookedModel:
                 return_type="all",
             )
             token_dict["attn_pattern_row_positions"] = token_row_indexes
-        
+
         assert isinstance(token_indexes, list), "Token index must be a list"
         assert isinstance(token_dict, dict), "Token dict must be a dict"
 
@@ -967,7 +1028,7 @@ class HookedModel:
                 raise ValueError("Token dict must be an int, a dict or a list")
         # update the mapping index in the cache if avg
         if extraction_config.avg:
-            for i,token in enumerate(target_token_positions):
+            for i, token in enumerate(target_token_positions):
                 mapping_index[token] = [i]
             mapping_index["info"] = "avg"
         cache["mapping_index"] = mapping_index
@@ -982,9 +1043,9 @@ class HookedModel:
         """
         return self.forward(*args, **kwds)
 
-    def predict(self, k=10, strip:bool = True,  **kwargs):
+    def predict(self, k=10, strip: bool = True, **kwargs):
         out = self.forward(**kwargs)
-        logits = out["logits"][:,-1,:]
+        logits = out["logits"][:, -1, :]
         probs = torch.softmax(logits, dim=-1)
         probs = probs.squeeze()
         topk = torch.topk(probs, k)
@@ -1180,13 +1241,16 @@ class HookedModel:
         attn_pattern = (
             ActivationCache()
         )  # Initialize the dictionary to hold running averages
-        
+
         # if register_agregation is in the kwargs, we will register the aggregation of the attention pattern
         if "register_aggregation" in kwargs:
-            all_cache.register_aggregation(kwargs["register_aggregation"][0], kwargs["register_aggregation"][1])
-            attn_pattern.register_aggregation(kwargs["register_aggregation"][0], kwargs["register_aggregation"][1])
-            
-        
+            all_cache.register_aggregation(
+                kwargs["register_aggregation"][0], kwargs["register_aggregation"][1]
+            )
+            attn_pattern.register_aggregation(
+                kwargs["register_aggregation"][0], kwargs["register_aggregation"][1]
+            )
+
         # example_dict = {}
         n_batches = 0  # Initialize batch counter
 
@@ -1211,7 +1275,9 @@ class HookedModel:
                 **kwargs,
             )
             # possible memory leak from here -___--------------->
-            additional_dict = batch_saver(others) #TODO: Maybe keep the batch_saver in a different cache
+            additional_dict = batch_saver(
+                others
+            )  # TODO: Maybe keep the batch_saver in a different cache
             if additional_dict is not None:
                 # cache = {**cache, **additional_dict}if a
                 cache.update(additional_dict)
@@ -1227,23 +1293,21 @@ class HookedModel:
             del inputs
             torch.cuda.empty_cache()
 
-        logger.debug(
-            "Forward pass finished - started to aggregate different batch"
-        )
+        logger.debug("Forward pass finished - started to aggregate different batch")
         all_cache.update(attn_pattern)
         # all_cache["example_dict"] = example_dict
         # logger.info("HookedModel: Aggregation finished")
 
         torch.cuda.empty_cache()
-        
+
         # add a metadata field to the cache
         all_cache.add_metadata(
-            target_token_positions = target_token_positions,
-            model_name = self.config.model_name,
-            extraction_config = extraction_config.to_dict(),
-            interventions = interventions,
+            target_token_positions=target_token_positions,
+            model_name=self.config.model_name,
+            extraction_config=extraction_config.to_dict(),
+            interventions=interventions,
         )
-        
+
         return all_cache
 
     @torch.no_grad()
@@ -1381,11 +1445,10 @@ class HookedModel:
                 inputs=inputs,
                 target_token_positions=target_token_positions,
                 pivot_positions=base_batch.get("pivot_positions", None),
-                extraction_config=ExtractionConfig(**args),
-                ablation_queries=args["ablation_queries"],
-                patching_queries=args["patching_queries"],
                 external_cache=args["external_cache"],
                 batch_idx=args["batch_idx"],
+                extraction_config=ExtractionConfig(**args),
+                interventions=args["interventions"],
                 move_to_cpu=args["move_to_cpu"],
             )
 
@@ -1404,19 +1467,22 @@ class HookedModel:
                     requested_position_to_extract.append(
                         query["patching_elem"].split("@")[1]
                     )
-                interventions.extend([
-                    Intervention(
-                        type="full",
-                        activation=query["activation_type"].format(layer),
-                        token_positions=[query["patching_elem"].split("@")[1]],
-                        patching_values=base_cache[query["activation_type"].format(layer)]
-                        .detach()
-                        .clone(),
-                    ) for layer in query["layers_to_patch"]
-                ])
+                interventions.extend(
+                    [
+                        Intervention(
+                            type="full",
+                            activation=query["activation_type"].format(layer),
+                            token_positions=[query["patching_elem"].split("@")[1]],
+                            patching_values=base_cache[
+                                query["activation_type"].format(layer)
+                            ]
+                            .detach()
+                            .clone(),
+                        )
+                        for layer in query["layers_to_patch"]
+                    ]
+                )
 
-                
-                
                 # query["patching_activations"] = base_cache
                 #     )
                 # query["base_activation_index"] = base_cache["mapping_index"][

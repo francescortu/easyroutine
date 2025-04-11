@@ -59,6 +59,7 @@ def create_dynamic_hook(pyvene_hook: Callable, **kwargs):
 #     cache[cache_key] = b.data.detach().clone()
 #     return b
 
+
 def embed_hook(module, args, kwargs, output, token_indexes, cache, cache_key):
     r"""
     Hook function to extract the embeddings of the tokens. It will save the embeddings in the cache (a global variable out the scope of the function)
@@ -69,8 +70,8 @@ def embed_hook(module, args, kwargs, output, token_indexes, cache, cache_key):
         cache[cache_key].append(b.data.detach().clone()[..., list(token_index)])
     cache[cache_key] = tuple(cache[cache_key])
     # cache[cache_key] = b.data.detach().clone()
-    
-    
+
+
 def compute_statistics(tensor, dim=-1, keepdim=True, eps=1e-6):
     """
     Computes the mean, variance, and second moment of a given tensor along a specified dimension.
@@ -85,33 +86,34 @@ def compute_statistics(tensor, dim=-1, keepdim=True, eps=1e-6):
         tuple: (mean, variance, second_moment)
     """
     mean = tensor.mean(dim=dim, keepdim=keepdim)  # Compute mean
-    second_moment = tensor.pow(2).mean(dim=dim, keepdim=keepdim)  # Compute second moment
+    second_moment = tensor.pow(2).mean(
+        dim=dim, keepdim=keepdim
+    )  # Compute second moment
     variance = second_moment - mean.pow(2)  # Compute variance using E[X²] - (E[X])²
 
     return mean.squeeze(-1), variance.squeeze(-1), second_moment.squeeze(-1)
 
-def layernom_hook(module,args,kwargs,output,token_indexes,cache,cache_key, avg: bool = False):
+
+def layernom_hook(
+    module, args, kwargs, output, token_indexes, cache, cache_key, avg: bool = False
+):
     b = process_args_kwargs_output(args, kwargs, output)
     if avg:
         token_avgs = []
         for token_index in token_indexes:
             slice_ = b.data.detach().clone()[..., list(token_index), :]
             mean, variance, second_moment = compute_statistics(slice_)
-            token_avgs.append({
-                               "mean": mean,
-                               "variance": variance,
-                               "second_moment": second_moment
-                               })
-        cache[cache_key] = token_avgs 
+            token_avgs.append(
+                {"mean": mean, "variance": variance, "second_moment": second_moment}
+            )
+        cache[cache_key] = token_avgs
     flatten_indexes = [item for sublist in token_indexes for item in sublist]
-    mean, variance, second_moment = compute_statistics(b[..., flatten_indexes,:])
+    mean, variance, second_moment = compute_statistics(b[..., flatten_indexes, :])
     cache[cache_key] = {
         "mean": mean,
         "variance": variance,
-        "second_moment": second_moment
+        "second_moment": second_moment,
     }
-    
-
 
 
 # Define a hook that saves the activations of the residual stream
@@ -136,17 +138,18 @@ def save_resid_hook(
         for token_index in token_indexes:
             slice_ = b.data.detach().clone()[..., list(token_index), :]
             token_avgs.append(torch.mean(slice_, dim=-2, keepdim=True))
-            
+
         # cache[cache_key] = torch.cat(token_avgs, dim=-2)
         cache.add_with_info(
             cache_key,
             torch.cat(token_avgs, dim=-2),
             "Shape: batch avg_over_target_token_position, d_model",
         )
-        
+
     else:
         flatten_indexes = [item for sublist in token_indexes for item in sublist]
         cache[cache_key] = b.data.detach().clone()[..., flatten_indexes, :]
+
 
 def intervention_resid_hook(
     module,
@@ -154,7 +157,7 @@ def intervention_resid_hook(
     kwargs,
     output,
     token_indexes,
-    patching_values: Optional[Union[str,torch.Tensor]] = None
+    patching_values: Optional[Union[str, torch.Tensor]] = None,
 ):
     r"""
     Hook function to ablate the tokens in the residual stream. It will set to 0 the value vector of the
@@ -162,10 +165,14 @@ def intervention_resid_hook(
     """
     b = process_args_kwargs_output(args, kwargs, output)
     if patching_values is None or patching_values == "ablation":
-        logger.debug("No patching values provided, ablation will be performed on the residual stream")
+        logger.debug(
+            "No patching values provided, ablation will be performed on the residual stream"
+        )
         b.data[..., list(token_indexes), :] = 0
     else:
-        logger.debug("Patching values provided, applying patching values to the residual stream")
+        logger.debug(
+            "Patching values provided, applying patching values to the residual stream"
+        )
         b.data[..., list(token_indexes), :] = patching_values
     return b
 
@@ -180,7 +187,7 @@ def query_key_value_hook(
     token_indexes,
     layer,
     head_dim,
-    num_key_value_groups:int,
+    num_key_value_groups: int,
     head: Union[str, int] = "all",
     avg: bool = False,
 ):
@@ -194,7 +201,6 @@ def query_key_value_hook(
     # cache[cache_key] = b.data.detach().clone()[..., token_index, :]
 
     info_string = "Shape: batch seq_len d_head"
- 
 
     heads = [idx for idx in range(b.size(1))] if head == "all" else [head]
     for head_idx in heads:
@@ -276,7 +282,7 @@ def head_out_hook(
     avg: bool = False,
 ):
     b = process_args_kwargs_output(args, kwargs, output)
-    
+
     bsz, seq_len, hidden_size = b.shape
     b = b.view(bsz, seq_len, num_heads, head_dim)
     # reshape the weights to have the head dimension
@@ -284,19 +290,19 @@ def head_out_hook(
         o_proj_weight,
         "d_model (num_heads head_dim) -> num_heads head_dim d_model",
         num_heads=num_heads,
-        head_dim=head_dim
+        head_dim=head_dim,
     )
-    
+
     # apply the projection
     projected_values = einsum(
         b,
         o_proj_weight,
         "batch seq_len num_head d_head, num_head d_head d_model -> batch seq_len num_head d_model",
     )
-    
+
     if o_proj_bias is not None:
         projected_values = projected_values + o_proj_bias // num_heads
-        
+
     # Process token indexes from projected_values of shape [batch, tokens, num_heads, d_model]
     if avg:
         # For each tuple, slice out the corresponding tokens and average over them.
@@ -324,7 +330,6 @@ def head_out_hook(
             "Shape: batch selected_inputs_ids_len, d_model",
         )
 
-        
 
 def multiply_pattern(tensor, multiplication_value):
     r"""
@@ -332,7 +337,6 @@ def multiply_pattern(tensor, multiplication_value):
     """
     # return torch.zeros_like(tensor) + multiplication_value
     return tensor * multiplication_value
-
 
 
 # b.copy_(attn_matrix)
@@ -345,7 +349,8 @@ def intervention_attn_mat_hook(
     k_positions,
     head,
     multiplication_value,
-    patching_values: Optional[Union[str,torch.Tensor]] = None
+    patching_values: Optional[Union[str, torch.Tensor]] = None,
+    apply_softmax: bool = False,
     # ablation_queries: pd.DataFrame,
 ):
     r"""
@@ -357,11 +362,9 @@ def intervention_attn_mat_hook(
     b = process_args_kwargs_output(args, kwargs, output)
     batch_size, num_heads, seq_len_q, seq_len_k = b.shape
 
-
     # Used during generation
     if seq_len_q < len(q_positions):
         q_positions = 0
-
 
     # Create boolean masks for queries and keys
     q_mask = torch.zeros(seq_len_q, dtype=torch.bool, device=b.device)
@@ -379,22 +382,27 @@ def intervention_attn_mat_hook(
     #     head_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, num_heads, -1, -1)
     # )
 
-
-    
     # select the head
     # head_mask = head_mask[:, head, :, :]
 
     if patching_values is None or patching_values == "ablation":
         logger.debug("No patching values provided, ablation will be performed")
-    # Apply the ablation function directly to the attention matrix
-        b[:,head,head_mask] = multiply_pattern(b[:,head,head_mask], multiplication_value)
-    
+        # Apply the ablation function directly to the attention matrix
+        b[:, head, head_mask] = multiply_pattern(
+            b[:, head, head_mask], multiplication_value
+        )
+
     else:
         # Apply the patching values to the attention matrix
         logger.debug("Patching values provided, applying patching values")
-        logger.debug("Patching values shape: %s. It is expected to have shape seq_len x seq_len", patching_values.shape)
-    
-        b[:,head,head_mask] = patching_values[head_mask] 
+        logger.debug(
+            "Patching values shape: %s. It is expected to have shape seq_len x seq_len",
+            patching_values.shape,
+        )
+
+        b[:, head, head_mask] = patching_values[head_mask]
+    if apply_softmax:
+        b[:, head] = torch.nn.functional.softmax(b[:, head], dim=-1)
     return b
 
 
@@ -611,10 +619,208 @@ def projected_value_vectors_head(
     # Post-process the value vectors by selecting heads.
     if head == "all":
         for head_idx in range(num_attention_heads):
-            cache[f"projected_value_L{layer}H{head_idx}"] = projected_values[:, head_idx]
+            cache[f"projected_value_L{layer}H{head_idx}"] = projected_values[
+                :, head_idx
+            ]
     else:
         cache[f"projected_value_L{layer}H{head}"] = projected_values[:, int(head)]
 
+
+def projected_key_vectors_head(
+    module,
+    args,
+    kwargs,
+    output,
+    layer,
+    cache,
+    token_indexes,
+    num_attention_heads: int,
+    num_key_value_heads: int,
+    hidden_size: int,
+    d_head: int,
+    out_proj_weight,
+    out_proj_bias,
+    head: Union[str, int] = "all",
+    act_on_input=False,
+    expand_head: bool = True,
+    avg=False,
+):
+    r"""
+    Hook function to extract the key vectors of the heads and project them through the attention output matrix.
+    This shows the contribution that keys in each position could have to the residual stream through the attention mechanism.
+
+    Like other hooks, it saves the activations in the cache.
+
+    Args:
+        b: the input of the hook function (output of the key vectors)
+        layer: the layer of the model
+        head: the head of the model. If "all" is passed, it will extract all the heads of the layer
+        expand_head: bool to expand the head dimension when extracting the keys vectors
+    """
+    # Get the key vectors
+    b = process_args_kwargs_output(args, kwargs, output)
+
+    keys = b.data.detach().clone()  # (batch, num_heads, seq_len, head_dim)
+
+    # Reshape the key vectors to have a separate dimension for the different heads
+    keys = rearrange(
+        keys,
+        "batch seq_len (num_key_value_heads d_heads) -> batch num_key_value_heads seq_len d_heads",
+        num_key_value_heads=num_key_value_heads,
+        d_heads=d_head,
+    )
+
+    # If needed, repeat KV heads to match attention heads (for grouped query attention)
+    keys = repeat_kv(keys, num_attention_heads // num_key_value_heads)
+
+    keys = rearrange(
+        keys,
+        "batch num_head seq_len d_model -> batch seq_len num_head d_model",
+    )
+
+    # Reshape out_proj_weight to get the blocks for each head
+    out_proj_weight = out_proj_weight.t().view(
+        num_attention_heads,
+        d_head,
+        hidden_size,
+    )
+
+    # Apply bias if present
+    if out_proj_bias is not None:
+        out_proj_bias = out_proj_bias.view(1, 1, 1, hidden_size)
+
+    # Apply the projection for each head
+    projected_keys = einsum(
+        keys,
+        out_proj_weight,
+        "batch seq_len num_head d_head, num_head d_head d_model -> batch seq_len num_head d_model",
+    )
+    if out_proj_bias is not None:
+        projected_keys = projected_keys + out_proj_bias
+
+    # Rearrange the tensor to have dimensions that we prefer
+    projected_keys = rearrange(
+        projected_keys,
+        "batch seq_len num_head d_model -> batch num_head seq_len d_model",
+    )
+
+    # Process token indices
+    if avg:
+        # For each tuple, slice out the tokens and average over them
+        token_avgs = []
+        for token_tuple in token_indexes:
+            token_slice = projected_keys[..., list(token_tuple), :]
+            token_avg = torch.mean(token_slice, dim=-2, keepdim=True)
+            token_avgs.append(token_avg)
+        projected_keys = torch.cat(token_avgs, dim=-2)
+    else:
+        flatten_indexes = [item for tup in token_indexes for item in tup]
+        projected_keys = projected_keys[..., flatten_indexes, :]
+
+    # Save to cache based on selected heads
+    if head == "all":
+        for head_idx in range(num_attention_heads):
+            cache[f"projected_key_L{layer}H{head_idx}"] = projected_keys[:, head_idx]
+    else:
+        cache[f"projected_key_L{layer}H{head}"] = projected_keys[:, int(head)]
+
+
+def projected_query_vectors_head(
+    module,
+    args,
+    kwargs,
+    output,
+    layer,
+    cache,
+    token_indexes,
+    num_attention_heads: int,
+    num_key_value_heads: int,
+    hidden_size: int,
+    d_head: int,
+    out_proj_weight,
+    out_proj_bias,
+    head: Union[str, int] = "all",
+    act_on_input=False,
+    expand_head: bool = True,
+    avg=False,
+):
+    r"""
+    Hook function to extract the query vectors of the heads and project them through the attention output matrix.
+    This shows the contribution that queries in each position could have to the residual stream through the attention mechanism.
+
+    Like other hooks, it saves the activations in the cache.
+
+    Args:
+        b: the input of the hook function (output of the query vectors)
+        layer: the layer of the model
+        head: the head of the model. If "all" is passed, it will extract all the heads of the layer
+        expand_head: bool to expand the head dimension when extracting the query vectors
+    """
+    # Get the query vectors
+    b = process_args_kwargs_output(args, kwargs, output)
+
+    queries = b.data.detach().clone()  # (batch, seq_len, num_heads*d_head)
+
+    # Reshape the query vectors to have a separate dimension for the heads
+    queries = rearrange(
+        queries,
+        "batch seq_len (num_attention_heads d_heads) -> batch num_attention_heads seq_len d_heads",
+        num_attention_heads=num_attention_heads,
+        d_heads=d_head,
+    )
+
+    queries = rearrange(
+        queries,
+        "batch num_head seq_len d_model -> batch seq_len num_head d_model",
+    )
+
+    # Reshape out_proj_weight to get the blocks for each head
+    out_proj_weight = out_proj_weight.t().view(
+        num_attention_heads,
+        d_head,
+        hidden_size,
+    )
+
+    # Apply bias if present
+    if out_proj_bias is not None:
+        out_proj_bias = out_proj_bias.view(1, 1, 1, hidden_size)
+
+    # Apply the projection for each head
+    projected_queries = einsum(
+        queries,
+        out_proj_weight,
+        "batch seq_len num_head d_head, num_head d_head d_model -> batch seq_len num_head d_model",
+    )
+    if out_proj_bias is not None:
+        projected_queries = projected_queries + out_proj_bias
+
+    # Rearrange the tensor to have dimensions that we prefer
+    projected_queries = rearrange(
+        projected_queries,
+        "batch seq_len num_head d_model -> batch num_head seq_len d_model",
+    )
+
+    # Process token indices
+    if avg:
+        # For each tuple, slice out the tokens and average over them
+        token_avgs = []
+        for token_tuple in token_indexes:
+            token_slice = projected_queries[..., list(token_tuple), :]
+            token_avg = torch.mean(token_slice, dim=-2, keepdim=True)
+            token_avgs.append(token_avg)
+        projected_queries = torch.cat(token_avgs, dim=-2)
+    else:
+        flatten_indexes = [item for tup in token_indexes for item in tup]
+        projected_queries = projected_queries[..., flatten_indexes, :]
+
+    # Save to cache based on selected heads
+    if head == "all":
+        for head_idx in range(num_attention_heads):
+            cache[f"projected_query_L{layer}H{head_idx}"] = projected_queries[
+                :, head_idx
+            ]
+    else:
+        cache[f"projected_query_L{layer}H{head}"] = projected_queries[:, int(head)]
 
 
 def avg_attention_pattern_head(
@@ -648,9 +854,9 @@ def avg_attention_pattern_head(
     attn_pattern = b.data.detach().clone()  # (batch, num_heads,seq_len, seq_len)
     # attn_pattern = attn_pattern.to(torch.float32)
     num_heads = attn_pattern.size(1)
-    
+
     token_indexes = [item for sublist in token_indexes for item in sublist]
-    
+
     for head in range(num_heads):
         key = f"avg_pattern_L{layer}H{head}"
         if key not in attn_pattern_current_avg:
@@ -707,7 +913,7 @@ def attention_pattern_head(
     head: Union[str, int] = "all",
     act_on_input=False,
     attn_pattern_avg: Literal["mean", "sum", "baseline_ratio", "none"] = "none",
-    attn_pattern_row_partition = None
+    attn_pattern_row_partition=None,
 ):
     """
     Hook function to extract the attention pattern of the heads. It will extract the attention pattern.
@@ -723,11 +929,11 @@ def attention_pattern_head(
         - head (Union[str, int]): the head of the model. If "all" is passed, it will extract all the heads of the layer
         - attn_pattern_avg (Literal["mean", "sum", "baseline_ratio", "none"]): the method to average the attention pattern
         - attn_pattern_row_partition (List[int]): the indexes of the tokens to partition the attention pattern
-        
+
     Avg strategies:
         If the attn_pattern_avg is not "none", the attention pattern is divided in blocks and the average value of each block is computed, using the method specified in attn_pattern_avg.
         The idea is to partition the attention pattern into groups of tokens, and then compute a single average value for each group. The pattern is divided into len(attn_pattern_row_partition) x len(token_indexes) blocks, where each block is a subset of the attention pattern. Each block B_ij is defined to have the indeces of the rows in attn_pattern_row_partition[i] and the columns in token_indexes[j]. If attn_pattern_row_partition is None, then the rows are the same as token_indexes.
-        
+
         0| a_00 0    0    0    0    0    0              token_indexes = [(1,3), (4)]
         1| a_10 a_11 0    0    0    0    0              attn_pattern_row_partition = [(0,1)]
         2| a_20 a_21 a_22 0    0    0    0
@@ -737,7 +943,7 @@ def attention_pattern_head(
         6| a_60 a_61 a_62 a_63 a_64 a_65 a_66
            ------------------------------
             0    1     2   3     4    5    6
-        
+
         - Block B_00:
             - Rows: 0,1
             - Columns: 1,2,3
@@ -746,64 +952,60 @@ def attention_pattern_head(
             - Rows: 0,1
             - Columns: 4
             - Block: [a_04, a_14]
-            
-            
+
+
         If attn_pattern_avg is "mean", the average value for each block is computed as the mean of the block, so the output will be: batch n_row_blocks n_col_blocks
         So in this case, the output will be: batch 1 2 where the first value is the average of the first block and the second value is the average of the second block.
-        
+
         The method to compute a single value for each block is specified by the attn_pattern_avg parameter, and can be one of the following:
         - "mean": Compute the mean of the block.
         - "sum": Compute the sum of the block.
         - "baseline_ratio": Compute the ratio of the observed average attention to the expected average attention. The expected average attention is computed by assuming that attention is uniform across the block. So, for each row in attn_pattern_row_partition, we compute the fraction of allowed keys that belong to token_indexes. The expected average attention is the sum of these fractions divided by the number of rows. The final ratio is the observed average attention divided by the expected average attention.
-        
+
 
     """
     # first get the attention pattern
     b = process_args_kwargs_output(args, kwargs, output)
 
     attn_pattern = b.data.detach().clone()  # (batch, num_heads,seq_len, seq_len)
-    
-    
+
     if head == "all":
         head_indices = range(attn_pattern.size(1))
     else:
         head_indices = [head]
-        
+
     if attn_pattern_row_partition is not None:
         token_indexes_group1 = attn_pattern_row_partition
     else:
         token_indexes_group1 = token_indexes
-        
-    
 
     # For each token group (each tuple in token_indexes), compute a single average value.
     if attn_pattern_row_partition is not None:
         for h in head_indices:
             # For head h, pattern has shape [batch, seq_len, seq_len].
             group_avgs = []
-            
+
             # Generate all combinations of groups
             for group1 in token_indexes_group1:
                 for group2 in token_indexes:
                     # Extract the attention block for this combination.
                     attn_block = attn_pattern[:, h, list(group1), :][:, :, list(group2)]
-                    
+
                     # Depending on the selected averaging method, compute a metric.
                     if attn_pattern_avg == "mean":
                         # Simple mean over the block.
                         avg_val = torch.mean(attn_block, dim=(-2, -1))  # shape: [batch]
-                    
+
                     elif attn_pattern_avg == "sum":
                         # Simple sum over the block.
                         avg_val = torch.sum(attn_block, dim=(-2, -1))
-                    
+
                     elif attn_pattern_avg == "baseline_ratio":
                         # ---- Step 1. Compute the observed average attention in the block.
-                        observed_val = torch.mean(attn_block, dim=(-2, -1))  # shape: [batch]
-                    
- 
-                        
-                        
+                        observed_val = torch.mean(
+                            attn_block, dim=(-2, -1)
+                        )  # shape: [batch]
+
                         # ---- Step 2. Compute the baseline expectation.
                         # For each row (i.e. token index) in group1, we calculate the fraction of allowed keys
                         # that belong to group2. Because the attention is lower-triangular,
@@ -815,40 +1017,51 @@ def attention_pattern_head(
                             # Count the number of tokens in group2 that are allowed for row i.
                             allowed_count = sum(1 for j in group2 if j <= i)
                             # Total keys available for row i (assuming indices start at 0).
-                            total_allowed = i + 1  
+                            total_allowed = i + 1
                             # Avoid division by zero (should not happen if i>=0).
-                            baseline_ratio = allowed_count / total_allowed if total_allowed > 0 else 0.0
+                            baseline_ratio = (
+                                allowed_count / total_allowed
+                                if total_allowed > 0
+                                else 0.0
+                            )
                             baseline_list.append(baseline_ratio)
-                        
-                        
+
                         # Average the per-row baseline over all rows in group1.
                         # This represents the expected average attention to group2 if it were uniformly distributed.
                         baseline_val = sum(baseline_list) / len(baseline_list)
-                        
+
                         # ---- Step 3. Compute the final ratio.
                         # We compare the observed average attention to the baseline expectation.
                         # A value > 1 means that, on average, attention in this block is higher than expected.
                         # Expand baseline_val to match the batch shape for element-wise division.
-                        baseline_tensor = torch.tensor(baseline_val, device=observed_val.device).expand_as(observed_val)
+                        baseline_tensor = torch.tensor(
+                            baseline_val, device=observed_val.device
+                        ).expand_as(observed_val)
                         avg_val = observed_val / baseline_tensor
                     else:
                         avg_val = attn_block
-                    
+
                     if attn_pattern_avg != "none":
                         # Append the computed metric for this block (keeping the batch dimension).
                         group_avgs.append(avg_val.unsqueeze(1))  # shape: [batch, 1]
                     else:
                         # If no averaging is requested, store the block directly.
                         group_avgs.append(attn_block)
-                        
+
             if attn_pattern_avg != "none":
-                pattern_avg = einops.rearrange(torch.cat(group_avgs, dim=1), "batch (G1 G2) -> batch G1 G2", G1=len(token_indexes_group1), G2=len(token_indexes))
+                pattern_avg = einops.rearrange(
+                    torch.cat(group_avgs, dim=1),
+                    "batch (G1 G2) -> batch G1 G2",
+                    G1=len(token_indexes_group1),
+                    G2=len(token_indexes),
+                )
             else:
                 try:
                     pattern_avg = torch.cat(group_avgs, dim=1)
                 except:
-                    raise ValueError(f"Error concatenating group_avgs with shapes {[x.shape for x in group_avgs]}")
-            
+                    raise ValueError(
+                        f"Error concatenating group_avgs with shapes {[x.shape for x in group_avgs]}"
+                    )
 
             # Add the pattern to the cache
             cache[f"pattern_L{layer}H{h}"] = pattern_avg

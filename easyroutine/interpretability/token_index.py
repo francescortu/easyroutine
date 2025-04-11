@@ -7,6 +7,7 @@ import importlib.resources
 from easyroutine.logger import logger
 
 TokenType = Union[str, int, Tuple[int, int]]  # New type for tokens
+SpecialTokenType = Union[str, List[str]]  # New type for special tokens
 
 
 # Load the YAML configuration file
@@ -67,9 +68,18 @@ class TokenIndex:
 
         # Unpack model tokens:
         # start_image_token: token marking the beginning of an image section
-        # special: any special token that might occur inside an image section
+        # special: special tokens or sequences that might occur inside an image section
         # end_image_token: token marking the end of an image section
         start_image_token, special, end_image_token = SUPPORTED_MODELS[self.model_name]
+
+        # Convert special to list if it's a single token
+        if isinstance(special, str):
+            special = [special]
+        # Convert special tokens to list of lists for uniform processing
+        if special is None:
+            special_sequences = []
+        else:
+            special_sequences = [s if isinstance(s, list) else [s] for s in special]
 
         image_start_tokens = []
         image_end_tokens = []
@@ -81,20 +91,40 @@ class TokenIndex:
         # Case 1: When the start and end markers differ.
         if start_image_token is None or start_image_token != end_image_token:
             in_image_sequence = False
-            for i, token in enumerate(string_tokens):
+            i = 0
+            while i < len(string_tokens):
+                token = string_tokens[i]
                 if token == start_image_token and not in_image_sequence:
                     in_image_sequence = True
                     image_start_tokens.append(i)
-                elif in_image_sequence and token == end_image_token:
+                    i += 1
+                    continue
+
+                if in_image_sequence and token == end_image_token:
                     in_image_sequence = False
                     image_end_tokens.append(i)
                     last_line_image_tokens.append(i - 1)
-                elif in_image_sequence and special and token == special:
-                    special_tokens.append(i)
-                elif in_image_sequence:
+                    i += 1
+                    continue
+
+                if in_image_sequence:
+                    # Check for special token sequences
+                    sequence_found = False
+                    for seq in special_sequences:
+                        if i + len(seq) <= len(string_tokens):
+                            # Check if the current position matches the sequence
+                            if string_tokens[i : i + len(seq)] == seq:
+                                special_tokens.extend(range(i, i + len(seq)))
+                                i += len(seq)
+                                sequence_found = True
+                                break
+                    if sequence_found:
+                        continue
+
                     image_tokens.append(i)
                 else:
                     text_tokens.append(i)
+                i += 1
         # Case 2: When the start and end markers are identical.
         else:
             # Collect all indices where the marker appears.
@@ -133,7 +163,7 @@ class TokenIndex:
                 if token != start_image_token:
                     text_tokens.append(i)
                 # Optionally, if special tokens may occur outside the image region:
-                elif special and token == special:
+                if special and token in special:
                     special_tokens.append(i)
 
         tokens_group, positions_group = self.group_tokens(string_tokens)

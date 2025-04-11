@@ -7,7 +7,7 @@ from easyroutine.interpretability.hooked_model import (
     ExtractionConfig,
 )
 from easyroutine.interpretability.activation_cache import ActivationCache
-from easyroutine.interpretability.interventions import  Intervention
+from easyroutine.interpretability.interventions import Intervention
 from PIL import Image
 import numpy as np
 from typing import List
@@ -142,10 +142,55 @@ class BaseHookedModelTestCase(unittest.TestCase):
 
     def test_pattern_with_extract_cache(self):
         """
-        Pattern is dangerous, needs its own test
+        Test the extract_cache method with attention pattern extraction.
         """
-        # raise test failed
-        self.assertTrue(False)
+        dataloader = [self.INPUTS, self.INPUTS]
+        target_token_positions = ["all"]
+
+        # Create an extraction config with pattern extraction
+        extraction_config = ExtractionConfig(
+            extract_attn_pattern=True,
+            attn_pattern_avg="mean",
+            attn_pattern_row_positions=["all"],
+        )
+
+        # Extract the cache
+        final_cache = self.MODEL.extract_cache(
+            dataloader,
+            target_token_positions=target_token_positions,
+            extraction_config=extraction_config,
+        )
+
+        # Check for attention pattern in the cache
+        for layer in range(self.MODEL.model_config.num_hidden_layers):
+            for head in range(self.MODEL.model_config.num_attention_heads):
+                pattern_key = f"pattern_L{layer}H{head}"
+                self.assertIn(pattern_key, final_cache)
+                self.assertEqual(
+                    final_cache[pattern_key].shape,
+                    (2, self.input_size, self.input_size),
+                )
+
+        # Test with averaging over examples
+        extraction_config_avg = ExtractionConfig(
+            extract_attn_pattern=True,
+            attn_pattern_avg="mean",
+            attn_pattern_row_positions=["all"],
+            avg_over_example=True,
+        )
+
+        avg_cache = self.MODEL.extract_cache(
+            dataloader,
+            target_token_positions=target_token_positions,
+            extraction_config=extraction_config_avg,
+        )
+
+        # Check that patterns were averaged over examples (batch dim should be 1)
+        pattern_key = f"pattern_L0H0"
+        self.assertIn(pattern_key, avg_cache)
+        self.assertEqual(
+            avg_cache[pattern_key].shape, (1, self.input_size, self.input_size)
+        )
 
     def test_hook_resid_out(self):
         cache = self.MODEL.forward(
@@ -578,10 +623,10 @@ class BaseHookedModelTestCase(unittest.TestCase):
                 Intervention(
                     type="columns",
                     activation="pattern_L1H2",
-                    token_positions = ["inputs-partition-0"],
-                    patching_values = "ablation"
+                    token_positions=["inputs-partition-0"],
+                    patching_values="ablation",
                 )
-            ]
+            ],
         )
 
         # cache = self.MODEL.forward(
@@ -601,10 +646,14 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         self.assertEqual(ablation_cache["pattern_L1H2"][0, :4, :4].sum(), 0)
+
     def test_ablation_attn_matrix_lm_only(self):
         self.MODEL.use_language_model_only()
         ablation_cache = self.MODEL.forward(
-            inputs={"input_ids": self.INPUTS["input_ids"],"attention_mask": self.INPUTS["attention_mask"]},
+            inputs={
+                "input_ids": self.INPUTS["input_ids"],
+                "attention_mask": self.INPUTS["attention_mask"],
+            },
             target_token_positions=["all"],
             pivot_positions=[4],
             extraction_config=ExtractionConfig(
@@ -615,10 +664,10 @@ class BaseHookedModelTestCase(unittest.TestCase):
                 Intervention(
                     type="columns",
                     activation="pattern_L1H2",
-                    token_positions = ["inputs-partition-0"],
-                    patching_values = "ablation"
+                    token_positions=["inputs-partition-0"],
+                    patching_values="ablation",
                 )
-            ]
+            ],
         )
 
         # cache = self.MODEL.forward(
@@ -642,9 +691,11 @@ class BaseHookedModelTestCase(unittest.TestCase):
     def test_token_index(self):
         # TODO: add edge cases for token_index
         pass
-    def test_intervention(self): 
+
+    def test_intervention(self):
         pass
-    
+
+
 ################### BASE TEST CASES ######################
 class TestHookedTestModel(BaseHookedModelTestCase):
     """
@@ -770,6 +821,7 @@ class TestHookedLlavaModel(BaseHookedModelTestCase):
 
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
+
 class TestHookedGemma3Model(BaseHookedModelTestCase):
     @classmethod
     def setUpClass(cls):
@@ -787,25 +839,27 @@ class TestHookedGemma3Model(BaseHookedModelTestCase):
         messages = [
             {
                 "role": "system",
-                "content": [{"type": "text", "text": "You are a helpful assistant."}]
+                "content": [{"type": "text", "text": "You are a helpful assistant."}],
             },
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": get_a_random_pil()},
-                    {"type": "text", "text": "Describe this image in detail."}
-                ]
-            }
+                    {"type": "text", "text": "Describe this image in detail."},
+                ],
+            },
         ]
 
-        cls.INPUTS  = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=True,
-            return_dict=True, return_tensors="pt"
+        cls.INPUTS = tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
         )
 
-        
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
-        
+
 
 # if __name__ == "__main__":
 #     unittest.main(verbosity=2)

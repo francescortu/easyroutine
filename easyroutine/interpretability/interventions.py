@@ -14,26 +14,32 @@ from functools import partial
 from dataclasses import dataclass
 
 
-
 @dataclass
 class Intervention:
     """
     User interface to define the intervention
-    
+
     Arguments:
-        - type: Literal["columns", "rows", "full", "block-img-txt", "block-img-img", "keep-self-attn"]: The type of intervention to be applied. "columns" will intervene on the columns of the attention matrix, "rows" will intervene on the rows of the attention matrix, "full" will intervene on the full attention matrix, "block-img-txt" will intervene on the block of image and text, "block-img-img" will intervene on the block of image and image, "keep-self-attn" will keep the self-attention of the model. 
+        - type: Literal["columns", "rows", "full", "block-img-txt", "block-img-img", "keep-self-attn"]: The type of intervention to be applied. "columns" will intervene on the columns of the attention matrix, "rows" will intervene on the rows of the attention matrix, "full" will intervene on the full attention matrix, "block-img-txt" will intervene on the block of image and text, "block-img-img" will intervene on the block of image and image, "keep-self-attn" will keep the self-attention of the model.
         - activation: str: The activation to be intervened. Should have the same format as returned from cache
         - token_positions: List[Union[str, int]]: The positions of the tokens that will be intervened or ablated
         - patching_values: Optional[Union[torch.Tensor, Literal["ablation"]]]: The values to be substituted during the intervention. If None or "ablation" the values will be set to zero.
     """
 
     type: Literal[
-        "columns", "rows", "full", "block-img-txt", "block-img-img", "keep-self-attn", "grid"
+        "columns",
+        "rows",
+        "full",
+        "block-img-txt",
+        "block-img-img",
+        "keep-self-attn",
+        "grid",
     ]
     activation: str
     token_positions: Union[List[Union[str, int]], Tuple[List[str], List[str]]]
     patching_values: Optional[Union[torch.Tensor, Literal["ablation"]]] = None
     multiplication_value: float = 0.0
+    apply_softmax: bool = False
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -42,7 +48,7 @@ class Intervention:
 class InterventionConfig(BaseModel):
     """
     Essential information to apply the intervention
-    
+
     Arguments:
         - hook_name: str: The name of the hook to be applied, should be the same as model_config
         - hook_func: Any: The function that will be applied to the hook
@@ -64,7 +70,7 @@ class InterventionConfig(BaseModel):
 
 
 ##
-def columns_attn_mat(hook_name, intervention:Intervention, token_dict):
+def columns_attn_mat(hook_name, intervention: Intervention, token_dict):
     """
     Pre-Hook function to compute the columns to be intervened in the attention matrix.
     """
@@ -73,16 +79,14 @@ def columns_attn_mat(hook_name, intervention:Intervention, token_dict):
     for token in intervention.token_positions:
         keys_intervention_token_position.extend(token_dict[token])
 
-    queries_token_positions = [
-        q for q in token_dict["all"] 
-    ]
+    queries_token_positions = [q for q in token_dict["all"]]
     try:
         layer = int(re.search(r"L(\d+)", intervention.activation).group(1))
         head = int(re.search(r"H(\d+)", intervention.activation).group(1))
     except AttributeError:
         raise ValueError(
-            f"Activation {intervention['activation']} is not in the format pattern_L\d+H\d+")
-
+            f"Activation {intervention['activation']} is not in the format pattern_L\d+H\d+"
+        )
 
     return {
         "component": hook_name.format(layer),
@@ -92,12 +96,13 @@ def columns_attn_mat(hook_name, intervention:Intervention, token_dict):
             k_positions=keys_intervention_token_position,
             patching_values=intervention.patching_values,
             head=head,
-            multiplication_value=intervention.multiplication_value
+            multiplication_value=intervention.multiplication_value,
+            apply_softmax=intervention.apply_softmax,
         ),
     }
 
 
-def rows_attn_mat(hook_name, intervention:Intervention, token_dict):
+def rows_attn_mat(hook_name, intervention: Intervention, token_dict):
     """
     Pre-Hook function to compute the columns to be intervened in the attention matrix.
     """
@@ -106,16 +111,14 @@ def rows_attn_mat(hook_name, intervention:Intervention, token_dict):
     for token in intervention.token_positions:
         queries_token_positions.extend(token_dict[token])
 
-    keys_token_positions = [
-        k for k in token_dict["all"] 
-    ]
+    keys_token_positions = [k for k in token_dict["all"]]
     try:
         layer = int(re.search(r"L(\d+)", intervention.activation).group(1))
         head = int(re.search(r"H(\d+)", intervention.activation).group(1))
     except AttributeError:
         raise ValueError(
-            f"Activation {intervention['activation']} is not in the format pattern_L\d+H\d+")
-
+            f"Activation {intervention['activation']} is not in the format pattern_L\d+H\d+"
+        )
 
     return {
         "component": hook_name.format(layer),
@@ -125,16 +128,22 @@ def rows_attn_mat(hook_name, intervention:Intervention, token_dict):
             k_positions=keys_token_positions,
             patching_values=intervention.patching_values,
             head=head,
-            multiplication_value=intervention.multiplication_value
+            multiplication_value=intervention.multiplication_value,
+            apply_softmax=intervention.apply_softmax,
         ),
     }
-    
+
+
 def grid_attn_mat(hook_name, intervention, token_dict):
-    
     try:
-        assert isinstance(intervention.token_positions, tuple) and len(intervention.token_positions) == 2
+        assert (
+            isinstance(intervention.token_positions, tuple)
+            and len(intervention.token_positions) == 2
+        )
         try:
-            assert isinstance(intervention.token_positions[0], list) and isinstance(intervention.token_positions[1], list)
+            assert isinstance(intervention.token_positions[0], list) and isinstance(
+                intervention.token_positions[1], list
+            )
         except AssertionError:
             raise ValueError(
                 f"Intervention token_positions should be a tuple of two lists if intervening on pattern with two grid, got {type(intervention.token_positions)}"
@@ -143,8 +152,7 @@ def grid_attn_mat(hook_name, intervention, token_dict):
         raise ValueError(
             f"Intervention token_positions should be a tuple of two lists if intervening on pattern with two grid, got {type(intervention.token_positions)}"
         )
-        
-        
+
     queries_token_positions = []
     for token in intervention.token_positions[0]:
         queries_token_positions.extend(token_dict[token])
@@ -157,8 +165,8 @@ def grid_attn_mat(hook_name, intervention, token_dict):
         head = int(re.search(r"H(\d+)", intervention.activation).group(1))
     except AttributeError:
         raise ValueError(
-            f"Activation {intervention['activation']} is not in the format pattern_L\d+H\d+")
-
+            f"Activation {intervention['activation']} is not in the format pattern_L\d+H\d+"
+        )
 
     return {
         "component": hook_name.format(layer),
@@ -168,9 +176,11 @@ def grid_attn_mat(hook_name, intervention, token_dict):
             k_positions=keys_token_positions,
             patching_values=intervention.patching_values,
             head=head,
-            multiplication_value=intervention.multiplication_value
+            multiplication_value=intervention.multiplication_value,
+            apply_softmax=intervention.apply_softmax,
         ),
     }
+
 
 def block_img_txt_attn_mat(hook_name, intervention, token_dict):
     # compute the pre-hooks information and return the hook_func
@@ -198,7 +208,7 @@ class InterventionManager:
     Class to manage the interventions (ablation, patching, etc) on the model
 
     User should define intervention object
-    
+
     Arguments:
         - model_config: ModelConfig: The configuration of the model
     """
@@ -209,25 +219,26 @@ class InterventionManager:
     ):
         self.model_config = model_config
 
-
-    def create_intervention_hooks(self, interventions: List[Intervention], token_dict: dict):
+    def create_intervention_hooks(
+        self, interventions: List[Intervention], token_dict: dict
+    ):
         """
         Function that given a list of interventions, returns a list of hooks to be applied to the model.
-        
+
         Arguments:
             - interventions: List[Intervention]. The list of interventions to be applied to the model
             - token_dict: dict. The dictionary containing the token positions in the model
-            
+
         Returns:
             - List[Dict[str, Any]]: The list of hooks to be applied to the model
         """
-        self._register_interventions() # Register the interventions. Here to support dynamical model_config changes
-        
+        self._register_interventions()  # Register the interventions. Here to support dynamical model_config changes
+
         hooks = []
         for intervention in interventions:
             type_str = intervention["activation"]
             intervention_type = intervention["type"]
-            
+
             # Find the matching regex key from supported_interventions
             matched_config = None
             for pattern, config_dict in self.supported_interventions.items():
@@ -235,7 +246,9 @@ class InterventionManager:
                     matched_config = config_dict
                     break
             if matched_config is None:
-                raise ValueError(f"No supported intervention found for activation type {type_str}")
+                raise ValueError(
+                    f"No supported intervention found for activation type {type_str}"
+                )
 
             # Check if the intervention_type is supported for that regex key.
             if intervention_type not in matched_config:
@@ -251,7 +264,6 @@ class InterventionManager:
             )
             hooks.append(hook)
         return hooks
-
 
     def _register_interventions(self):
         """
@@ -280,23 +292,99 @@ class InterventionManager:
                     apply_intervention_func=block_img_txt_attn_mat,
                 ),
             },
-            re.compile(r"resid_out_L\d+"): {
+            # Residual stream interventions
+            re.compile(r"resid_out_\d+"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.residual_stream_hook_name,
                     hook_func=intervention_resid_hook,
                     apply_intervention_func=intervention_resid_full,
                 )
             },
-            re.compile(r"resid_in_L\d+"): {
+            re.compile(r"resid_in_\d+"): {
                 "full": InterventionConfig(
-                    hook_name=self.model_config.residual_stream_hook_name,
+                    hook_name=self.model_config.residual_stream_input_hook_name,
                     hook_func=intervention_resid_hook,
                     apply_intervention_func=intervention_resid_full,
                 )
             },
-            re.compile(r"resid_mid_L\d+"): {
+            re.compile(r"resid_mid_\d+"): {
                 "full": InterventionConfig(
-                    hook_name=self.model_config.residual_stream_hook_name,
+                    hook_name=self.model_config.intermediate_stream_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            # Attention input and output interventions
+            re.compile(r"attn_in_\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.attn_in_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            re.compile(r"attn_out_\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.attn_out_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            # MLP output interventions
+            re.compile(r"mlp_out_\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.mlp_out_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            # Head component interventions
+            re.compile(r"values_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_value_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            re.compile(r"keys_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_key_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            re.compile(r"queries_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_query_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            # Projected vectors interventions
+            re.compile(r"projected_value_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_value_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            re.compile(r"projected_key_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_key_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            re.compile(r"projected_query_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_query_hook_name,
+                    hook_func=intervention_resid_hook,
+                    apply_intervention_func=intervention_resid_full,
+                )
+            },
+            # Head output interventions
+            re.compile(r"head_out_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.attn_o_proj_input_hook_name,
                     hook_func=intervention_resid_hook,
                     apply_intervention_func=intervention_resid_full,
                 )
