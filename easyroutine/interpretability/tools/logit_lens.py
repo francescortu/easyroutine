@@ -9,6 +9,8 @@ from easyroutine.logger import logger
 from tqdm import tqdm
 from copy import deepcopy
 import re
+from pathlib import Path
+import json
 
 class LogitLens:
     def __init__(self, unembedding_matrix, last_layer_norm: nn.Module, model_name: str, model_config:ModelConfig):
@@ -17,6 +19,7 @@ class LogitLens:
         self.model_name = model_name
         self.layernorm_type:Literal["RMS", "LayerNorm"] = model_config.layernorm_type
         self.num_attn_heads  = model_config.num_attention_heads
+        self.tuned_lens = None
         
     def __repr__(self):
         return f"LogitLens({self.model_name})"
@@ -32,6 +35,22 @@ class LogitLens:
         torch.cuda.empty_cache()
         return cls
     
+    @classmethod
+    def from_tuned_lens(cls, tuned_lens_path: Path, model: HookedModel) -> 'LogitLens':
+        cls = cls.from_model(model)
+        tuned_lens_path = Path(tuned_lens_path)
+        if not tuned_lens_path.exists():
+            raise FileNotFoundError(f"Tuned lens path {tuned_lens_path} does not exist")
+        if not tuned_lens_path.is_dir():
+            raise ValueError(f"Tuned lens path {tuned_lens_path} is not a directory")
+        
+        cls.tuned_lens = torch.load(Path(tuned_lens_path,"params.pt"))
+        tuned_lens_config = json.load(open(Path(tuned_lens_path,"config.json"), "r"))
+        if tuned_lens_config["base_model_name_or_path"] != model.config.model_name:
+            raise ValueError(f"Tuned lens model {tuned_lens_config['base_model_name_or_path']} does not match model {model.config.model_name}")
+        
+        return cls
+        
     def to(self, device: Union[str, torch.device]):
         # move 
         self.unembed = self.unembed.to(device)
@@ -208,6 +227,9 @@ class LogitLens:
                         # Apply LayerNorm
                         if apply_norm:
                             curr_act = self.apply_layernorm(curr_act, mean, variance, second_moment, key)
+                        
+                        if self.tuned_lens is not None:
+                            curr_act = self.apply_tuned_lens_traslator(curr_act, key)
 
                         logits[i] = torch.matmul(curr_act.to(self.unembed.device), direction_vector)
 
@@ -230,6 +252,8 @@ class LogitLens:
                             
                             if apply_norm:
                                 curr_act = self.apply_layernorm(curr_act, mean, variance, second_moment, key)
+                            if self.tuned_lens is not None:
+                                curr_act = self.apply_tuned_lens_traslator(curr_act, key)
                             
                             logits_tok1 = torch.matmul(curr_act.to(self.unembed.device), tok1_unembed)
                             logits_tok2 = torch.matmul(curr_act.to(self.unembed.device), tok2_unembed)
@@ -260,3 +284,31 @@ class LogitLens:
                 logit_lens[f"logit_lens_{key}"] = logits
 
         return logit_lens
+
+    def apply_tuned_lens_traslator(self, act, key):
+        """
+        Apply the tuned lens translator to the activations.
+
+        Args:
+            act (torch.Tensor): The activations to apply the tuned lens translator to.
+            key (str): The key to use for the tuned lens translator.
+
+        Returns:
+            torch.Tensor: The translated activations.
+        """
+        # get the layer number from the key both for resid_out and head_out. The key is in the format "resid_out_{i}" or "head_out_L{i}H{j}"
+        layer_number = int(re.search(r"\d+", key).group())
+        
+        if self.tuned_lens is None:
+            raise ValueError("Tuned lens not found. Please load the tuned lens first.")
+        
+        weight = self.tuned_lens[f"{layer_number}.weight"]
+        bias = self.tuned_lens[f"{layer_number}.bias"]
+        
+        # Apply the tuned lens translator
+        act = F.linear(act, weight, bias)
+        return act
+        
+    
+        
+        

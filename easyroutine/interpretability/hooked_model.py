@@ -301,7 +301,7 @@ class HookedModel:
 
     def use_full_model(self):
         if self.processor is not None:
-            logger.info("HookedModel: Using full model capabilities")
+            logger.debug("HookedModel: Using full model capabilities")
             if self.base_model is not None:
                 self.hf_model = self.base_model
                 self.model_config.restore_full_model()
@@ -309,7 +309,7 @@ class HookedModel:
         else:
             if self.base_model is not None:
                 self.hf_model = self.base_model
-            logger.info("HookedModel: Using full text only model capabilities")
+            logger.debug("HookedModel: Using full text only model capabilities")
 
     def use_language_model_only(self):
         if self.hf_language_model is None:
@@ -323,7 +323,7 @@ class HookedModel:
             self.base_model = self.hf_model
             self.hf_model = self.hf_language_model
             self.model_config.use_language_model()
-            logger.info("HookedModel: Using only language model capabilities")
+            logger.debug("HookedModel: Using only language model capabilities")
 
     def get_tokenizer(self):
         return self.hf_tokenizer
