@@ -80,6 +80,7 @@ class Gemma3AttentionWrapper(BaseAttentionWrapper):
         self.num_key_value_groups = original_attention.num_key_value_groups
 
         # Add the custom hook module.
+        self.attention_matrix_pre_softmax_hook = AttentionMatrixHookModule()
         self.attention_matrix_hook = AttentionMatrixHookModule()
 
     def forward(
@@ -133,6 +134,7 @@ class Gemma3AttentionWrapper(BaseAttentionWrapper):
             attn_weights = attn_weights + causal_mask
 
         # Apply softmax.
+        attn_weights = self.attention_matrix_pre_softmax_hook(attn_weights)
         attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         # Pass the attention weights through the hook.
         attn_weights = self.attention_matrix_hook(attn_weights)

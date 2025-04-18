@@ -25,6 +25,7 @@ class LogitLens:
         return f"LogitLens({self.model_name})"
     @classmethod
     def from_model(cls, model: HookedModel) -> 'LogitLens':
+        model.use_full_model()
         return cls(model.get_lm_head(), model.get_last_layernorm(), model.config.model_name, model.model_config)
     
     @classmethod
@@ -142,7 +143,12 @@ class LogitLens:
 
         if self.layernorm_type == "RMS":
             weight = self.norm.weight
-            variance_eps = self.norm.variance_epsilon
+            if hasattr(self.norm, "variance_epsilon"):
+                variance_eps = self.norm.variance_epsilon
+            elif hasattr(self.norm, "eps"):
+                variance_eps = self.norm.eps
+            else:
+                raise ValueError("No variance epsilon found in RMSNorm")
             weight= weight.to(device)
 
             # Ensure broadcasting `[batch, token_indexes] -> [batch, token_indexes, hidden_dim]`
@@ -304,7 +310,11 @@ class LogitLens:
         
         weight = self.tuned_lens[f"{layer_number}.weight"]
         bias = self.tuned_lens[f"{layer_number}.bias"]
-        
+        # move to the same device 
+        weight = weight.to(act.device)
+        # print("transp")
+        weight = weight.t()
+        bias = bias.to(act.device)
         # Apply the tuned lens translator
         act = F.linear(act, weight, bias)
         return act

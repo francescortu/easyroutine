@@ -119,6 +119,7 @@ class LlamaAttentionWrapper(BaseAttentionWrapper):
         self.config = original_attention.config
 
         # Add your custom hook module
+        self.attention_matrix_pre_softmax_hook = AttentionMatrixHookModule()
         self.attention_matrix_hook = AttentionMatrixHookModule()
 
     def forward(
@@ -155,6 +156,8 @@ class LlamaAttentionWrapper(BaseAttentionWrapper):
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
+        # Pre-softmax hook
+        attn_weights = self.attention_matrix_pre_softmax_hook(attn_weights)
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = self.attention_matrix_hook(attn_weights)
         attn_weights = nn.functional.dropout(

@@ -63,6 +63,7 @@ class ModelConfig:
     attn_out_hook_name: str
     attn_o_proj_input_hook_name: str
     attn_matrix_hook_name: str
+    attn_matrix_pre_softmax_hook_name: str
     mlp_out_hook_name: str
     last_layernorm_hook_name: str
     
@@ -169,6 +170,7 @@ class ModelFactory:
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
+                attn_matrix_pre_softmax_hook_name="model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                 last_layernorm_hook_name="model.norm.input",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="model.layers[{}].self_attn.o_proj.bias",
@@ -242,6 +244,7 @@ class ModelFactory:
                     attn_o_proj_input_hook_name="language_model.model.layers[{}].self_attn.o_proj.input",
                     attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
                     attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
+                    attn_matrix_pre_softmax_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                     mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
                     last_layernorm_hook_name="language_model.model.norm.input",
                     attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
@@ -284,6 +287,7 @@ class ModelFactory:
                 attn_o_proj_input_hook_name="language_model.model.layers[{}].self_attn.o_proj.input",
                 attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
                 attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
+                attn_matrix_pre_softmax_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                 mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
                 last_layernorm_hook_name="language_model.model.norm.input",
                 attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
@@ -321,6 +325,7 @@ class ModelFactory:
                 attn_o_proj_input_hook_name="model.layers[{}].self_attn.o_proj.input",
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
+                attn_matrix_pre_softmax_hook_name="model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
                 last_layernorm_hook_name="model.norm.input",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",

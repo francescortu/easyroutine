@@ -182,6 +182,7 @@ class HookedModel:
                 else config.attn_implementation,
             )
         )
+        self.hf_model.eval()
         self.base_model = None
         self.module_wrapper_manager = ModuleWrapperManager(model=self.hf_model)
         self.intervention_manager = InterventionManager(model_config=self.model_config)
@@ -441,11 +442,11 @@ class HookedModel:
 
     def register_interventions(self, interventions: List[Intervention]):
         self.additional_interventions = interventions
-        logger.info(f"HookedModel: Registered {len(interventions)} interventions")
+        logger.debug(f"HookedModel: Registered {len(interventions)} interventions")
 
     def clean_interventions(self):
         self.additional_interventions = []
-        logger.info(
+        logger.debug(
             f"HookedModel: Removed {len(self.additional_interventions)} interventions"
         )
 

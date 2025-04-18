@@ -106,7 +106,7 @@ class MistralAttentionWrapper(BaseAttentionWrapper):
         self.attention_dropout = original_attention.attention_dropout
         self.layer_idx = original_attention.layer_idx
         self.config = original_attention.config
-        
+        self.attention_matrix_pre_softmax_hook = AttentionMatrixHookModule()        
         self.attention_matrix_hook = AttentionMatrixHookModule()
         
     def forward(
@@ -151,6 +151,7 @@ class MistralAttentionWrapper(BaseAttentionWrapper):
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
+        attn_weights = self.attention_matrix_pre_softmax_hook(attn_weights)
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = self.attention_matrix_hook(attn_weights)
         attn_weights = nn.functional.dropout(attn_weights, p=0.0 if not self.training else self.attention_dropout, training=self.training)

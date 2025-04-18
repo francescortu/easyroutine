@@ -34,6 +34,9 @@ class Intervention:
         "block-img-img",
         "keep-self-attn",
         "grid",
+        "columns_pre_softmax",
+        "rows_pre_softmax",
+        "grid_pre_softmax"
     ]
     activation: str
     token_positions: Union[List[Union[str, int]], Tuple[List[str], List[str]]]
@@ -288,6 +291,26 @@ class InterventionManager:
                 ),
                 "block_img_txt": InterventionConfig(
                     hook_name=self.model_config.attn_matrix_hook_name,
+                    hook_func=intervention_attn_mat_hook,
+                    apply_intervention_func=block_img_txt_attn_mat,
+                ),
+                "colums_pre_softmax": InterventionConfig(
+                    hook_name=self.model_config.attn_matrix_pre_softmax_hook_name,
+                    hook_func=intervention_attn_mat_hook,
+                    apply_intervention_func=columns_attn_mat,
+                ),
+                "rows_pre_softmax": InterventionConfig(
+                    hook_name=self.model_config.attn_matrix_pre_softmax_hook_name,
+                    hook_func=intervention_attn_mat_hook,
+                    apply_intervention_func=rows_attn_mat,
+                ),
+                "grid_pre_softmax": InterventionConfig(
+                    hook_name=self.model_config.attn_matrix_pre_softmax_hook_name,
+                    hook_func=intervention_attn_mat_hook,
+                    apply_intervention_func=grid_attn_mat,
+                ),
+                "block_img_txt_pre_softmax": InterventionConfig(
+                    hook_name=self.model_config.attn_matrix_pre_softmax_hook_name,
                     hook_func=intervention_attn_mat_hook,
                     apply_intervention_func=block_img_txt_attn_mat,
                 ),
