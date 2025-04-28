@@ -2,7 +2,8 @@ import re
 import torch
 import contextlib
 from easyroutine.logger import logger
-from typing import List, Union
+from typing import List, Union, Optional
+from rich import print as print
 
 # TODO: Add a method to expand the tensors in the cache adding the target token dimension using the mapping_index key. In this way we can have a tensors of shape (batch_size, target_tokens, num_tokens, hidden_size) and resolve the ambiguity of the target tokens when we have the average. Indeed, now we have a tensor of shape (batch_size, num_tokens, hidden_size) and mapping index map the index of the second dimension to the correct token. However, the second dim could be both single token or multiple tokens averaged. If we add a new dimension, could be easier to understand.
 
@@ -369,22 +370,209 @@ class ActivationCache:
             "interventions": interventions,
         }
 
-    def map_to_dict(
-        self, key:str
-    ) -> dict:
+    def map_to_dict(self, key: str) -> dict:
         """
         Maps the cache values to a dictionary based on mapping_index.
         """
         if self.cache[key] is None:
             logger.error(f"Key {key} not found in cache.")
-        
+
         elif not isinstance(self.cache[key], torch.Tensor):
             logger.error(f"Value for key {key} is not a tensor.")
-        
+
         mapping_index = self.cache["mapping_index"]
-        
+
         return_dict = {}
-        for key_map,value_map in mapping_index.items():
-            return_dict[key_map] = self.cache[key][:,value_map].squeeze()
-            
+        for key_map, value_map in mapping_index.items():
+            return_dict[key_map] = self.cache[key][:, value_map].squeeze()
+
         return return_dict
+
+    def memory_size(self, key: Optional[str] = None) -> str:
+        """
+        Returns the memory size of the cache in bytes.
+        """
+        if key is not None:
+            if key not in self.cache:
+                return "Not present: 0 B"
+            value = self.cache[key]
+            if isinstance(value, torch.Tensor):
+                total_size = value.element_size() * value.nelement()
+            elif isinstance(value, dict):
+                total_size = 0
+                for v in value.values():
+                    if isinstance(v, torch.Tensor):
+                        total_size += v.element_size() * v.nelement()
+            elif isinstance(value, list):
+                total_size = 0
+                for v in value:
+                    if isinstance(v, torch.Tensor):
+                        total_size += v.element_size() * v.nelement()
+                    else:
+                        logger.warning(f"Unknown type in list for key {key}: {type(v)}")
+            else:
+                logger.warning(f"Unknown type for key {key}: {type(value)}")
+                return "0 B"
+        else:
+            total_size = 0
+            for key, value in self.cache.items():
+                if isinstance(value, torch.Tensor):
+                    total_size += value.element_size() * value.nelement()
+                elif isinstance(value, dict):
+                    for v in value.values():
+                        if isinstance(v, torch.Tensor):
+                            total_size += v.element_size() * v.nelement()
+                elif isinstance(value, list):
+                    for v in value:
+                        if isinstance(v, torch.Tensor):
+                            total_size += v.element_size() * v.nelement()
+                        else:
+                            logger.warning(
+                                f"Unknown type in list for key {key}: {type(v)}"
+                            )
+                else:
+                    logger.warning(f"Unknown type for key {key}: {type(value)}")
+
+        # depending of the size, return the size in KB, MB or GB
+        # prioritize the size in GB, so 0.1 GB is 100 MB
+        if total_size > 1e9:
+            total_size /= 1e9
+            return f"{total_size:.2f} GB"
+        elif total_size > 1e6:
+            total_size /= 1e6
+            return f"{total_size:.2f} MB"
+        elif total_size > 1e3:
+            total_size /= 1e3
+            return f"{total_size:.2f} KB"
+        else:
+            total_size /= 1e3
+            return f"{total_size:.2f} B"
+
+    def memory_tree(self, print_tree: bool = False, grouped_tree: bool = False) -> dict:
+        """
+        Print a tree of the memory size of the cache.
+
+        Args:
+            print_tree (bool): If True, print the tree to the console.
+            grouped_tree (bool): If True, group similar keys (e.g., resid_out_0, resid_out_1 -> resid_out).
+
+        Returns:
+            dict: A dictionary of the memory sizes.
+        """
+        tree = {}
+        for key, value in self.cache.items():
+            if isinstance(value, torch.Tensor):
+                tree[key] = self.memory_size(key)
+            elif isinstance(value, dict):
+                tree[key] = {}
+                for k, v in value.items():
+                    if isinstance(v, torch.Tensor):
+                        tree[key][k] = self.memory_size(k)
+                    else:
+                        tree[key][k] = "Unknown type"
+            elif isinstance(value, list):
+                tree[key] = []
+                for v in value:
+                    if isinstance(v, torch.Tensor):
+                        tree[key].append(self.memory_size(key))
+                    else:
+                        tree[key].append("Unknown type")
+            else:
+                tree[key] = "Unknown type"
+
+        if grouped_tree:
+            grouped = {}
+            # Define regex patterns for grouping
+            patterns = {
+                r"resid_out_\d+": "resid_out",
+                r"resid_in_\d+": "resid_in",
+                r"resid_mid_\d+": "resid_mid",
+                r"attn_in_\d+": "attn_in",
+                r"attn_out_\d+": "attn_out",
+                r"avg_attn_pattern_L\d+H\d+": lambda m: f"avg_attn_pattern_L{m.group(1)}",
+                r"pattern_L(\d+)H\d+": lambda m: f"pattern_L{m.group(1)}",
+                r"head_out_\d+": "head_out",
+                r"mlp_out_\d+": "mlp_out",
+                r"values_\d+": "values",
+            }
+
+            for key, size in tree.items():
+                # Skip metadata and other special keys
+                if key == "metadata" or isinstance(size, (dict, list)):
+                    grouped[key] = size
+                    continue
+
+                # Try to match the key with patterns
+                matched = False
+                for pattern, replacement in patterns.items():
+                    match = re.match(pattern, key)
+                    if match:
+                        group_key = replacement
+                        if callable(replacement):
+                            group_key = replacement(match)
+
+                        # Convert size string to float value for aggregation
+                        size_value, unit = size.split()
+                        size_value = float(size_value)
+
+                        # Initialize group if not exists
+                        if group_key not in grouped:
+                            grouped[group_key] = {"size": 0.0, "unit": unit, "count": 0}
+
+                        # Normalize units
+                        if unit == "KB" and grouped[group_key]["unit"] == "MB":
+                            size_value /= 1000
+                        elif unit == "B" and grouped[group_key]["unit"] == "KB":
+                            size_value /= 1000
+                        elif unit == "B" and grouped[group_key]["unit"] == "MB":
+                            size_value /= 1000000
+                        elif unit == "MB" and grouped[group_key]["unit"] == "KB":
+                            grouped[group_key]["size"] /= 1000
+                            grouped[group_key]["unit"] = "MB"
+                        elif unit == "MB" and grouped[group_key]["unit"] == "B":
+                            grouped[group_key]["size"] /= 1000000
+                            grouped[group_key]["unit"] = "MB"
+                        elif unit == "GB" and grouped[group_key]["unit"] != "GB":
+                            # Convert all to GB
+                            if grouped[group_key]["unit"] == "MB":
+                                grouped[group_key]["size"] /= 1000
+                            elif grouped[group_key]["unit"] == "KB":
+                                grouped[group_key]["size"] /= 1000000
+                            elif grouped[group_key]["unit"] == "B":
+                                grouped[group_key]["size"] /= 1000000000
+                            grouped[group_key]["unit"] = "GB"
+                        elif grouped[group_key]["unit"] == "GB" and unit != "GB":
+                            # Convert size_value to GB
+                            if unit == "MB":
+                                size_value /= 1000
+                            elif unit == "KB":
+                                size_value /= 1000000
+                            elif unit == "B":
+                                size_value /= 1000000000
+
+                        # Aggregate sizes
+                        grouped[group_key]["size"] += size_value
+                        grouped[group_key]["count"] += 1
+                        matched = True
+                        break
+
+                # If no pattern matched, keep the original key
+                if not matched:
+                    grouped[key] = size
+
+            # Format the grouped sizes back to strings
+            for key, info in grouped.items():
+                if isinstance(info, dict) and "size" in info:
+                    grouped[key] = (
+                        f"{info['size']:.2f} {info['unit']} ({info['count']} items)"
+                    )
+
+            tree = grouped
+
+        if print_tree:
+            print("-" * 4 + " Activation Cache Memory Tree" + " -" * 4)
+            print("Total size: ", self.memory_size())
+            for key, value in tree.items():
+                print(f"   - {key}: {value}")
+
+        return tree

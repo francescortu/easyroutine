@@ -134,6 +134,7 @@ class ExtractionConfig:
     attn_pattern_row_positions: Optional[
         Union[List[int], List[Tuple], List[str], List[Union[int, Tuple, str]]]
     ] = None
+    save_logits: bool = True
 
     def is_not_empty(self):
         """
@@ -1003,7 +1004,8 @@ class HookedModel:
         flatten_target_token_positions = [
             item for sublist in token_indexes for item in sublist
         ]
-        cache["logits"] = output.logits[:, flatten_target_token_positions, :]
+        if extraction_config.save_logits:
+            cache["logits"] = output.logits[:, flatten_target_token_positions, :]
         # since attention_patterns are returned in the output, we need to adapt to the cache structure
         if move_to_cpu:
             cache.cpu()
@@ -1267,6 +1269,7 @@ class HookedModel:
 
                 # get input_ids, attention_mask, and if available, pixel_values from batch (that is a dictionary)
                 # then move them to the first device
+                
                 inputs = self.input_handler.prepare_inputs(batch, self.first_device)
                 others = {k: v for k, v in batch.items() if k not in inputs}
 
