@@ -193,11 +193,21 @@ def block_img_txt_attn_mat(hook_name, intervention, token_dict):
 def intervention_resid_full(hook_name, intervention, token_dict):
     # compute the pre-hooks information and return the hook_func
     target_positions = []
-    for token in intervention["target_positions"]:
-        target_positions.extend(token_dict[token])
+    for token in intervention["token_positions"]:
+        if isinstance(token, str) and token in token_dict:
+            # If the token is a string, get the positions from the token_dict
+            target_positions.extend(token_dict[token])
+        elif isinstance(token, int):
+            # If the token is an int, add it directly to the target positions
+            target_positions.append(token)
 
+    # get the integer layer number from teh activation string resid_out_L\d+ or resid_in_L\d+ or resid_mid_L\d+
+    layer = int(
+        re.search(r"(\d+)", intervention.activation).group(1)
+    )
+    
     return {
-        "component": hook_name,
+        "component": hook_name.format(layer),
         "intervention": partial(
             intervention_resid_hook,
             token_indexes=target_positions,

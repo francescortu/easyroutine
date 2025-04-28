@@ -31,6 +31,15 @@ def process_args_kwargs_output(args, kwargs, output):
                     break
     return b  # type:ignore
 
+def restore_same_args_kwargs_output(b, args, kwargs, output):
+    """
+    Inverse of process_args_kwargs_output
+    """
+    
+    if output is not None:
+        if isinstance(output, tuple):
+            b = (b,) + output[1:]
+    return b  # type:ignore
 
 # 2. Retrieving the module
 
@@ -164,17 +173,19 @@ def intervention_resid_hook(
     tokens to ablate
     """
     b = process_args_kwargs_output(args, kwargs, output)
+    #detach b to avoid modifying the original tensor
+    b = b.data.detach().clone()
     if patching_values is None or patching_values == "ablation":
         logger.debug(
             "No patching values provided, ablation will be performed on the residual stream"
         )
-        b.data[..., list(token_indexes), :] = 0
+        b[..., token_indexes, :] = 0
     else:
         logger.debug(
             "Patching values provided, applying patching values to the residual stream"
         )
-        b.data[..., list(token_indexes), :] = patching_values
-    return b
+        b[..., list(token_indexes), :] = patching_values
+    return restore_same_args_kwargs_output(b, args, kwargs, output)
 
 
 def query_key_value_hook(

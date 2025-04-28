@@ -43,6 +43,7 @@ import pandas as pd
 
 import importlib.resources
 import yaml
+from easyroutine.console import progress_bar
 
 
 def load_config() -> dict:
@@ -1255,44 +1256,49 @@ class HookedModel:
         # example_dict = {}
         n_batches = 0  # Initialize batch counter
 
-        for batch in tqdm(dataloader, total=len(dataloader), desc="Extracting cache:"):
-            # log_memory_usage("Extract cache - Before batch")
-            # tokens, others = batch
-            # inputs = {k: v.to(self.first_device) for k, v in tokens.items()}
+        with progress_bar as progress:
+            # task1 = progress.add_task(
+            #     description="[cyan]Extracting cache:", total=len(dataloader)
+            # )
+            for batch in progress.track(dataloader, description="Extracting cache", total=len(dataloader)):
+                # log_memory_usage("Extract cache - Before batch")
+                # tokens, others = batch
+                # inputs = {k: v.to(self.first_device) for k, v in tokens.items()}
 
-            # get input_ids, attention_mask, and if available, pixel_values from batch (that is a dictionary)
-            # then move them to the first device
-            inputs = self.input_handler.prepare_inputs(batch, self.first_device)
-            others = {k: v for k, v in batch.items() if k not in inputs}
+                # get input_ids, attention_mask, and if available, pixel_values from batch (that is a dictionary)
+                # then move them to the first device
+                inputs = self.input_handler.prepare_inputs(batch, self.first_device)
+                others = {k: v for k, v in batch.items() if k not in inputs}
 
-            cache = self.forward(
-                inputs,
-                target_token_positions=target_token_positions,
-                pivot_positions=batch.get("pivot_positions", None),
-                external_cache=attn_pattern,
-                batch_idx=n_batches,
-                extraction_config=extraction_config,
-                interventions=interventions,
-                **kwargs,
-            )
-            # possible memory leak from here -___--------------->
-            additional_dict = batch_saver(
-                others
-            )  # TODO: Maybe keep the batch_saver in a different cache
-            if additional_dict is not None:
-                # cache = {**cache, **additional_dict}if a
-                cache.update(additional_dict)
+                cache = self.forward(
+                    inputs,
+                    target_token_positions=target_token_positions,
+                    pivot_positions=batch.get("pivot_positions", None),
+                    external_cache=attn_pattern,
+                    batch_idx=n_batches,
+                    extraction_config=extraction_config,
+                    interventions=interventions,
+                    **kwargs,
+                )
+                # possible memory leak from here -___--------------->
+                additional_dict = batch_saver(
+                    others
+                )  # TODO: Maybe keep the batch_saver in a different cache
+                if additional_dict is not None:
+                    # cache = {**cache, **additional_dict}if a
+                    cache.update(additional_dict)
 
-            if move_to_cpu_after_forward:
-                cache.cpu()
+                if move_to_cpu_after_forward:
+                    cache.cpu()
 
-            n_batches += 1  # Increment batch counter# Process and remove "pattern_" keys from cache
-            all_cache.cat(cache)
+                n_batches += 1  # Increment batch counter# Process and remove "pattern_" keys from cache
+                all_cache.cat(cache)
 
-            del cache
-            inputs = self.input_handler.prepare_inputs(batch, "cpu")
-            del inputs
-            torch.cuda.empty_cache()
+                del cache
+                inputs = self.input_handler.prepare_inputs(batch, "cpu")
+                del inputs
+                torch.cuda.empty_cache()
+
 
         logger.debug("Forward pass finished - started to aggregate different batch")
         all_cache.update(attn_pattern)

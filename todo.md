@@ -27,3 +27,7 @@
 - [ ] Expand test for edge cases in token index 
 - [ ] Expand test for edge cases in aggregation of ActivationCache
 - [ ] Test ActivatioNCache.map_to_dict()
+
+## Console
+- [ ] Implement a rich.console module to handle output for the entire package
+- [ ] Substitute the current print statements with the rich.console module
