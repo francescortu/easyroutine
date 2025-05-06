@@ -39,6 +39,16 @@ def restore_same_args_kwargs_output(b, args, kwargs, output):
     if output is not None:
         if isinstance(output, tuple):
             b = (b,) + output[1:]
+    if output is None:
+        if len(args) > 0:
+            args = (b,) + args[1:]
+        else:
+            candidate_keys = ["hidden_states"]
+            for key in candidate_keys:
+                if key in kwargs:
+                    kwargs[key] = b
+                    break
+        return args, kwargs
     return b  # type:ignore
 
 # 2. Retrieving the module

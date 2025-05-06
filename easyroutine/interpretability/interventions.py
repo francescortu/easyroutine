@@ -158,11 +158,28 @@ def grid_attn_mat(hook_name, intervention, token_dict):
 
     queries_token_positions = []
     for token in intervention.token_positions[0]:
-        queries_token_positions.extend(token_dict[token])
+        if isinstance(token, str) and token in token_dict:
+            queries_token_positions.extend(token_dict[token])
+        elif isinstance(token, int):
+            # If the token is an int, add it directly to the target positions
+            queries_token_positions.append(token)
+        else:
+            raise ValueError(
+                f"Token {token} is not in the token_dict and is not an int, got {type(token)}"
+            )
+
 
     keys_token_positions = []
     for token in intervention.token_positions[1]:
-        keys_token_positions.extend(token_dict[token])
+        if isinstance(token, str) and token in token_dict:
+            keys_token_positions.extend(token_dict[token])
+        elif isinstance(token, int):
+            # If the token is an int, add it directly to the target positions
+            keys_token_positions.append(token)
+        else:
+            raise ValueError(
+                f"Token {token} is not in the token_dict and is not an int, got {type(token)}"
+            )
     try:
         layer = int(re.search(r"L(\d+)", intervention.activation).group(1))
         head = int(re.search(r"H(\d+)", intervention.activation).group(1))
