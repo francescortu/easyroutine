@@ -36,6 +36,8 @@ def sublist(old, new):
     return all_values
 
 
+
+
 def aggregate_last_layernorm(old, new):
     """
     Aggregates `last_layernorm` values by concatenating along the first dimension.
@@ -121,12 +123,14 @@ class ActivationCache:
             re.compile(r"mapping_index"),
             re.compile(r"mlp_out_\d+"),
             re.compile(r"last_layernorm"),
+            re.compile(r"token_dict")
         )
         self.aggregation_strategies = {}
         # Register default aggregators for some keys
         self.register_aggregation("mapping_index", just_old)
         self.register_aggregation("offset", sublist)
         self.register_aggregation("last_layernorm", aggregate_last_layernorm)
+        self.register_aggregation("token_dict", sublist)
         self.deferred_cache = False
 
     def __repr__(self) -> str:
@@ -289,7 +293,7 @@ class ActivationCache:
         try:
             return old + new
         except Exception as e:
-            logger.warning(
+            logger.debug(
                 f"Aggregation failed for values {old} and {new}: {e}; using list fallback."
             )
             return [old, new]

@@ -31,11 +31,12 @@ def process_args_kwargs_output(args, kwargs, output):
                     break
     return b  # type:ignore
 
+
 def restore_same_args_kwargs_output(b, args, kwargs, output):
     """
     Inverse of process_args_kwargs_output
     """
-    
+
     if output is not None:
         if isinstance(output, tuple):
             b = (b,) + output[1:]
@@ -50,6 +51,7 @@ def restore_same_args_kwargs_output(b, args, kwargs, output):
                     break
         return args, kwargs
     return b  # type:ignore
+
 
 # 2. Retrieving the module
 
@@ -183,7 +185,7 @@ def intervention_resid_hook(
     tokens to ablate
     """
     b = process_args_kwargs_output(args, kwargs, output)
-    #detach b to avoid modifying the original tensor
+    # detach b to avoid modifying the original tensor
     b = b.data.detach().clone()
     if patching_values is None or patching_values == "ablation":
         logger.debug(
@@ -1093,3 +1095,36 @@ def attention_pattern_head(
             # Slice both token dimensions using the flattened indexes.
             pattern_slice = attn_pattern[:, h, flatten_indexes][:, :, flatten_indexes]
             cache[f"pattern_L{layer}H{h}"] = pattern_slice
+
+
+def input_embedding_hook(module, args, kwargs, output, cache, cache_key, keep_gradient:bool = False):
+    r"""
+    Hook to capture the output of the embedding layer, enable gradients, and store it in the cache.
+    """
+    embeddings_tensor = None
+    if isinstance(output, torch.Tensor):
+        embeddings_tensor = output
+    elif (
+        isinstance(output, tuple)
+        and len(output) > 0
+        and isinstance(output[0], torch.Tensor)
+    ):
+        # Handle cases where the module returns a tuple (e.g., (embeddings, other_data))
+        embeddings_tensor = output[0]
+    else:
+        logger.warning(
+            f"Could not identify embeddings tensor in output of {module} for gradient hooking. Output type: {type(output)}"
+        )
+        return output  # Pass through if format is unexpected
+    if keep_gradient:
+        # Enable gradient tracking for the embeddings tensor
+        embeddings_tensor.requires_grad_(True).retain_grad()
+        
+    if embeddings_tensor is not None:
+        cache[cache_key] = (
+            embeddings_tensor  # Store the tensor that's part of the graph
+        )
+
+    return (
+        output  # Return the original (potentially modified in-place) output structure
+    )

@@ -15,6 +15,44 @@ import torch.nn.functional as F
 import torch.nn as nn
 import re
 
+import functools
+import inspect
+import torch
+from easyroutine.logger import logger
+
+def conditional_no_grad(flag_attr: str = "keep_gradient"):
+    """
+    Wrap a function in `torch.set_grad_enabled` depending on a boolean
+    attribute of the `extraction_config` argument.
+
+    Parameters
+    ----------
+    flag_attr : str
+        Name of the boolean attribute on `extraction_config` that means
+        “turn gradients OFF”.  When the attribute is present and True,
+        we enter `torch.no_grad()`.  Otherwise gradients stay ON.
+    """
+    def decorator(fn):
+        sig = inspect.signature(fn)           # only once, at decoration time
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            # 1. Locate the extraction_config argument (positional or keyword)
+            bound = sig.bind_partial(*args, **kwargs)
+            ecfg  = bound.arguments.get("extraction_config", None)
+
+            # 2. Decide whether we need gradients
+            grad = getattr(ecfg, flag_attr, True)
+            if grad:
+                logger.warning("Gradient enabled!")
+            # 3. Run the function with or without grad tracking
+            with torch.set_grad_enabled(grad):
+                return fn(*args, **kwargs)
+
+        return wrapper
+    return decorator
+
+
 
 def find_all_modules(torch_module, return_only_names: bool = False):
     r"""

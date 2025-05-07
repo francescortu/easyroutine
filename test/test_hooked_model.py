@@ -553,6 +553,23 @@ class BaseHookedModelTestCase(unittest.TestCase):
             cache["pattern_L1H1"].shape, (1, self.input_size, self.input_size)
         )
 
+    def test_extract_cache_with_gradient_computation(self):
+        cache_with_gradients = self.MODEL.extract_cache(
+            dataloader=[{**self.INPUTS, "vocabulary_index":123} , {**self.INPUTS, "vocabulary_index":129}],
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True, 
+                extract_embed=True, 
+                keep_gradient=True
+            ),
+            dict_token_index=torch.tensor([0, 1]),
+        )
+        # assert the presence of the keys
+        self.assertIn("input_embeddings_gradients", cache_with_gradients)
+        self.assertEqual(
+            cache_with_gradients["input_embeddings_gradients"].shape, cache_with_gradients["input_embeddings"].shape
+        )
+
     def test_module_wrapper(self):
         """
         Test if the wrapper that substitutes part of the model works equivalently to the original model.

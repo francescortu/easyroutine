@@ -24,6 +24,7 @@ from easyroutine.interpretability.utils import (
     logit_diff,
     get_attribute_from_name,
     kl_divergence_diff,
+    conditional_no_grad
 )
 from easyroutine.interpretability.hooks import (
     embed_hook,
@@ -36,6 +37,7 @@ from easyroutine.interpretability.hooks import (
     query_key_value_hook,
     head_out_hook,
     layernom_hook,
+    input_embedding_hook
 )
 
 from functools import partial
@@ -43,7 +45,8 @@ import pandas as pd
 
 import importlib.resources
 import yaml
-from easyroutine.console import progress_bar
+from easyroutine.console import get_progress_bar
+
 
 
 def load_config() -> dict:
@@ -109,7 +112,7 @@ class ExtractionConfig:
         attn_pattern_avg (Literal["mean", "sum", "baseline_ratio", "none"]): the type of average to perform over the attention pattern. See hook.py attention_pattern_head for more details
         attn_pattern_row_positions (Optional[Union[List[int], List[Tuple], List[str], List[Union[int, Tuple, str]]]): the row positions of the attention pattern to extract. See hook.py attention_pattern_head for more details
     """
-
+    extract_embed: bool = False
     extract_resid_in: bool = False
     extract_resid_mid: bool = False
     extract_resid_out: bool = False
@@ -135,6 +138,7 @@ class ExtractionConfig:
         Union[List[int], List[Tuple], List[str], List[Union[int, Tuple, str]]]
     ] = None
     save_logits: bool = True
+    keep_gradient: bool = False # New flag
 
     def is_not_empty(self):
         """
@@ -563,6 +567,19 @@ class HookedModel:
                 }
             ]
 
+        if extraction_config.extract_embed: # New block
+            hooks += [
+                {
+                    "component": self.model_config.embed_tokens, # Use the embedding module name directly
+                    "intervention": partial(
+                        input_embedding_hook,
+                        cache=cache,
+                        cache_key="input_embeddings",
+                        keep_gradient=extraction_config.keep_gradient
+                    ),
+                }
+            ]
+
         if extraction_config.extract_head_queries:
             hooks += [
                 {
@@ -907,7 +924,7 @@ class HookedModel:
                 hooks.append(hook)
         return hooks
 
-    @torch.no_grad()
+    @conditional_no_grad()
     def forward(
         self,
         inputs,
@@ -924,6 +941,7 @@ class HookedModel:
         # attn_heads: Union[list[dict], Literal["all"]] = "all",
         batch_idx: Optional[int] = None,
         move_to_cpu: bool = False,
+        vocabulary_index: Optional[int]  = None,
         **kwargs,
     ) -> ActivationCache:
         r"""
@@ -1012,6 +1030,7 @@ class HookedModel:
             if external_cache is not None:
                 external_cache.cpu()
 
+        stored_token_dict = {}
         mapping_index = {}
         current_index = 0
 
@@ -1019,12 +1038,15 @@ class HookedModel:
             mapping_index[token] = []
             if isinstance(token_dict, int):
                 mapping_index[token].append(current_index)
+                stored_token_dict[token] = token_dict
                 current_index += 1
             elif isinstance(token_dict, dict):
+                stored_token_dict[token] = token_dict[token]
                 for idx in range(len(token_dict[token])):
                     mapping_index[token].append(current_index)
                     current_index += 1
             elif isinstance(token_dict, list):
+                stored_token_dict[token] = token_dict
                 for idx in range(len(token_dict)):
                     mapping_index[token].append(current_index)
                     current_index += 1
@@ -1036,8 +1058,12 @@ class HookedModel:
                 mapping_index[token] = [i]
             mapping_index["info"] = "avg"
         cache["mapping_index"] = mapping_index
-
+        cache["token_dict"] = stored_token_dict
         self.remove_hooks(hook_handlers)
+        
+        if extraction_config.keep_gradient:
+            assert vocabulary_index is not None, "dict_token_index must be provided if extract_input_embeddings_for_grad is True"
+            self._compute_input_gradients(cache, vocabulary_index)
 
         return cache
 
@@ -1200,7 +1226,6 @@ class HookedModel:
             return self.hf_tokenizer.decode(output[0], skip_special_tokens=True)  # type: ignore
         return output  # type: ignore
 
-    @torch.no_grad()
     def extract_cache(
         self,
         dataloader,
@@ -1225,6 +1250,7 @@ class HookedModel:
             - extracted_token_position (Union[Union[str, int, Tuple[int, int]], List[Union[str, int, Tuple[int, int]]]]): list of tokens to extract the activations from (["last", "end-image", "start-image", "first", -1, (2,10)]). See TokenIndex.get_token_index for more details
             - batch_saver (Callable): function to save in the cache the additional element from each elemtn of the batch (For example, the labels of the dataset)
             - move_to_cpu_after_forward (bool): if True, move the activations to the cpu right after the any forward pass of the model
+            - dict_token_index (Optional[torch.Tensor]): If provided, specifies the index in the vocabulary for which to compute gradients of logits with respect to input embeddings. Requires extraction_config.extract_input_embeddings_for_grad to be True.
             - **kwargs: additional arguments to control hooks generation, basically accept any argument handled by the `.forward` method (i.e. ablation_queries, patching_queries, extract_resid_in)
 
         Returns:
@@ -1258,7 +1284,7 @@ class HookedModel:
         # example_dict = {}
         n_batches = 0  # Initialize batch counter
 
-        with progress_bar as progress:
+        with get_progress_bar() as progress:
             # task1 = progress.add_task(
             #     description="[cyan]Extracting cache:", total=len(dataloader)
             # )
@@ -1270,7 +1296,7 @@ class HookedModel:
                 # get input_ids, attention_mask, and if available, pixel_values from batch (that is a dictionary)
                 # then move them to the first device
                 
-                inputs = self.input_handler.prepare_inputs(batch, self.first_device)
+                inputs = self.input_handler.prepare_inputs(batch, self.first_device) # require_grads is False, gradients handled by hook if needed
                 others = {k: v for k, v in batch.items() if k not in inputs}
 
                 cache = self.forward(
@@ -1281,8 +1307,14 @@ class HookedModel:
                     batch_idx=n_batches,
                     extraction_config=extraction_config,
                     interventions=interventions,
+                    vocabulary_index=batch.get("vocabulary_index", None),
                     **kwargs,
                 )
+                
+                # Compute input gradients if requested
+
+
+                
                 # possible memory leak from here -___--------------->
                 additional_dict = batch_saver(
                     others
@@ -1298,10 +1330,11 @@ class HookedModel:
                 all_cache.cat(cache)
 
                 del cache
-                inputs = self.input_handler.prepare_inputs(batch, "cpu")
-                del inputs
+                
+                # Use the new cleanup_tensors method from InputHandler to free memory
+                self.input_handler.cleanup_tensors(inputs, others)
+                
                 torch.cuda.empty_cache()
-
 
         logger.debug("Forward pass finished - started to aggregate different batch")
         all_cache.update(attn_pattern)
@@ -1320,7 +1353,6 @@ class HookedModel:
 
         return all_cache
 
-    @torch.no_grad()
     def compute_patching(
         self,
         target_token_positions: List[Union[str, int, Tuple[int, int]]],
@@ -1575,3 +1607,52 @@ class HookedModel:
 
         logger.debug("HookedModel: Aggregation finished")
         return all_cache
+
+    def _compute_input_gradients(self, cache, vocabulary_index):
+        """
+        Private method to compute gradients of logits with respect to input embeddings.
+        
+        Args:
+            cache (ActivationCache): Cache containing logits and input_embeddings_for_grad
+            dict_token_index (torch.Tensor): Index in the vocabulary for which to compute gradients
+        
+        Returns:
+            bool: True if gradients were successfully computed, False otherwise
+        """
+        
+        supported_keys = ["input_embeddings"]
+        
+        if any(key not in cache for key in supported_keys):
+            logger.warning(f"Cannot compute gradients: {supported_keys} not found in cache. "
+                          "Ensure extraction_config.extract_input_embeddings_for_grad is True.")
+            return False
+
+            
+        if "logits" not in cache:
+            logger.warning("Cannot compute gradients: 'logits' not found in cache. "
+                          "Ensure extraction_config.save_logits is True.")
+            return False
+            
+        input_embeds = cache["input_embeddings"]
+        
+        if not input_embeds.requires_grad:
+            logger.warning("Cannot compute gradients: input embeddings do not require gradients.")
+            return False
+            
+        # Select the specific logit for the target token
+        target_logits = cache["logits"][0,-1, vocabulary_index]
+        
+        # Zero out existing gradients if any
+        if input_embeds.grad is not None:
+            input_embeds.grad.zero_()
+        
+        # Backward pass
+        target_logits.backward(retain_graph=True)
+        for key in supported_keys:
+            if key in cache:
+                cache[key + "_gradients"] = input_embeds.grad.clone()
+        return True
+        # Store the computed gradients
+
+
+   

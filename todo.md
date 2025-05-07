@@ -7,6 +7,7 @@
 - [x] Extend the three tutorials
 
 ## Features
+- [ ] Add support for keep gradient for all the keys in the activation cache
 - [x] Add the metadata in the cache and simply the ActivationSaver if it save a cache object
 - [x] Extend the intervention to support all the keys 
 - [x] Add `extract_head_keys_projected` and `extract_head_queries_projected` in the config
