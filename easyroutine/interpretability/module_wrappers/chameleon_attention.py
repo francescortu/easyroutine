@@ -83,7 +83,7 @@ class ChameleonAttentionWrapper(BaseAttentionWrapper):
         self.hidden_size = original_attention.hidden_size
         self.rotary_emb = original_attention.rotary_emb
     
-        
+        self.attention_matrix_pre_softmax_hook = AttentionMatrixHookModule()        
         self.attention_matrix_hook = AttentionMatrixHookModule()
         
         self.original_attention = original_attention
@@ -135,6 +135,7 @@ class ChameleonAttentionWrapper(BaseAttentionWrapper):
 
         # upcast attention to fp32
         # attn_weights = nn.functional.softmax(attn_weights, dim=-1).to(query_states.dtype)
+        attn_weights = self.attention_matrix_pre_softmax_hook(attn_weights)
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_weights = self.attention_matrix_hook(attn_weights)

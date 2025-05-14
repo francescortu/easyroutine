@@ -27,6 +27,7 @@ class T5AttentionWrapper(BaseAttentionWrapper):
             original_attention.has_relative_attention_bias
         )
         self.pruned_heads = original_attention.pruned_heads
+        self.attention_matrix_pre_softmax_hook = AttentionMatrixHookModule()
         self.attention_matrix_hook = AttentionMatrixHookModule()
         self.original_attention = original_attention
 
@@ -134,6 +135,7 @@ class T5AttentionWrapper(BaseAttentionWrapper):
         scores += position_bias_masked
 
         # (batch_size, n_heads, seq_length, key_length)
+        attn_weights = self.attention_matrix_pre_softmax_hook(scores)
         attn_weights = nn.functional.softmax(scores.float(), dim=-1).type_as(scores)
         attn_weights = self.attention_matrix_hook(attn_weights)
         attn_weights = nn.functional.dropout(

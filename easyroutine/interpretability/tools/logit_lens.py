@@ -6,9 +6,12 @@ from easyroutine.interpretability.activation_cache import ActivationCache
 from easyroutine.interpretability.hooked_model import HookedModel
 from easyroutine.interpretability.models import ModelConfig
 from easyroutine.logger import logger
+from easyroutine.console import progress_bar
 from tqdm import tqdm
 from copy import deepcopy
 import re
+from pathlib import Path
+import json
 
 class LogitLens:
     def __init__(self, unembedding_matrix, last_layer_norm: nn.Module, model_name: str, model_config:ModelConfig):
@@ -17,11 +20,13 @@ class LogitLens:
         self.model_name = model_name
         self.layernorm_type:Literal["RMS", "LayerNorm"] = model_config.layernorm_type
         self.num_attn_heads  = model_config.num_attention_heads
+        self.tuned_lens = None
         
     def __repr__(self):
         return f"LogitLens({self.model_name})"
     @classmethod
     def from_model(cls, model: HookedModel) -> 'LogitLens':
+        model.use_full_model()
         return cls(model.get_lm_head(), model.get_last_layernorm(), model.config.model_name, model.model_config)
     
     @classmethod
@@ -32,6 +37,22 @@ class LogitLens:
         torch.cuda.empty_cache()
         return cls
     
+    @classmethod
+    def from_tuned_lens(cls, tuned_lens_path: Path, model: HookedModel) -> 'LogitLens':
+        cls = cls.from_model(model)
+        tuned_lens_path = Path(tuned_lens_path)
+        if not tuned_lens_path.exists():
+            raise FileNotFoundError(f"Tuned lens path {tuned_lens_path} does not exist")
+        if not tuned_lens_path.is_dir():
+            raise ValueError(f"Tuned lens path {tuned_lens_path} is not a directory")
+        
+        cls.tuned_lens = torch.load(Path(tuned_lens_path,"params.pt"))
+        tuned_lens_config = json.load(open(Path(tuned_lens_path,"config.json"), "r"))
+        if tuned_lens_config["base_model_name_or_path"] != model.config.model_name:
+            raise ValueError(f"Tuned lens model {tuned_lens_config['base_model_name_or_path']} does not match model {model.config.model_name}")
+        
+        return cls
+        
     def to(self, device: Union[str, torch.device]):
         # move 
         self.unembed = self.unembed.to(device)
@@ -123,7 +144,12 @@ class LogitLens:
 
         if self.layernorm_type == "RMS":
             weight = self.norm.weight
-            variance_eps = self.norm.variance_epsilon
+            if hasattr(self.norm, "variance_epsilon"):
+                variance_eps = self.norm.variance_epsilon
+            elif hasattr(self.norm, "eps"):
+                variance_eps = self.norm.eps
+            else:
+                raise ValueError("No variance epsilon found in RMSNorm")
             weight= weight.to(device)
 
             # Ensure broadcasting `[batch, token_indexes] -> [batch, token_indexes, hidden_dim]`
@@ -158,6 +184,7 @@ class LogitLens:
         token_directions: Optional[Union[List[int], List[Tuple[int, int]]]] = None,
         apply_norm: bool = True,
         apply_softmax: bool = False,
+        metric: Optional[Literal["logit_diff", "accuracy"]] = "logit_diff" 
     ) -> dict:
         """
         Compute the logit lens on the activations given at the target_key.
@@ -167,6 +194,7 @@ class LogitLens:
             target_key (str): The key where to apply the logit lens.
             apply_norm (bool): Whether to apply the last layer norm.
             apply_softmax (bool): Whether to apply softmax after unembedding.
+            metric (Literal["logit_diff", "accuracy"]): The metric to compute. If used, token_directions must be provided. "logit_diff" computes the difference between the difference of the two tokens while "accuracy" computes the frequency of the first token being greater than the second token in the logits.
 
         Returns:
             dict: A dictionary with the logit lens results.
@@ -180,48 +208,119 @@ class LogitLens:
         logit_lens = {}
         last_layernorm_cached_parameters = activations.get("last_layernorm")
 
-        for key in tqdm(keys, total=len(keys), desc=f"Computing Logit Lens of {target_key}"):
-            act = activations.get(key).to("cpu")  # Assuming computations on CPU
+        with progress_bar as p:
+            for key in p.track(keys, total=len(keys), description=f"Computing Logit Lens of {target_key}"):
+                act = activations.get(key).to("cpu")  # Assuming computations on CPU
 
-            if token_directions is not None:
-                assert len(token_directions) == act.shape[0], "Token directions must match batch size"
+                if token_directions is not None:
+                    assert len(token_directions) == act.shape[0], "Token directions must match batch size"
+                    if metric == "logit_diff":
+                        batch_size = act.shape[0]
+                        seq_len = act.shape[1] if len(act.shape) > 2 else 1
+                        logits = torch.zeros(batch_size, seq_len, device=act.device)
 
-                batch_size = act.shape[0]
-                seq_len = act.shape[1] if len(act.shape) > 2 else 1
-                logits = torch.zeros(batch_size, seq_len, device=act.device)
+                        for i, direction in enumerate(token_directions):
+                            if (isinstance(direction, tuple) or isinstance(direction, list)) and len(direction) == 2:
+                                tok1, tok2 = direction
+                                direction_vector = self.unembed[tok1] - self.unembed[tok2]
+                            else:
+                                direction_vector = self.unembed[direction]
 
-                for i, direction in enumerate(token_directions):
-                    if (isinstance(direction, tuple) or isinstance(direction, list)) and len(direction) == 2:
-                        tok1, tok2 = direction
-                        direction_vector = self.unembed[tok1] - self.unembed[tok2]
+                            # Select activations and corresponding norm parameters
+                            curr_act = act[i] if len(act.shape) == 2 else act[i].reshape(-1, act.shape[-1])
+                            mean = last_layernorm_cached_parameters["mean"][i, :]
+                            variance = last_layernorm_cached_parameters["variance"][i, :]
+                            second_moment = last_layernorm_cached_parameters["second_moment"][i, :]
+
+                            # Apply LayerNorm
+                            if apply_norm:
+                                curr_act = self.apply_layernorm(curr_act, mean, variance, second_moment, key)
+                            
+                            if self.tuned_lens is not None:
+                                curr_act = self.apply_tuned_lens_traslator(curr_act, key)
+
+                            logits[i] = torch.matmul(curr_act.to(self.unembed.device), direction_vector)
+
+                    elif metric == "accuracy":
+                        batch_size = act.shape[0]
+                        seq_len = act.shape[1] if len(act.shape) > 2 else 1
+                        logits_tok1 = torch.zeros(batch_size, seq_len, device=act.device)
+                        logits_tok2 = torch.zeros(batch_size, seq_len, device=act.device)
+                        total_tok1_greater_tok2 = 0
+                        for i, direction in enumerate(token_directions):
+                            if (isinstance(direction, tuple) or isinstance(direction, list)) and len(direction) == 2:
+                                tok1, tok2 = direction
+                                tok1_unembed = self.unembed[tok1]
+                                tok2_unembed = self.unembed[tok2]
+                                
+                                curr_act = act[i] if len(act.shape) == 2 else act[i].reshape(-1, act.shape[-1])
+                                mean = last_layernorm_cached_parameters["mean"][i, :]
+                                variance = last_layernorm_cached_parameters["variance"][i, :]
+                                second_moment = last_layernorm_cached_parameters["second_moment"][i, :]
+                                
+                                if apply_norm:
+                                    curr_act = self.apply_layernorm(curr_act, mean, variance, second_moment, key)
+                                if self.tuned_lens is not None:
+                                    curr_act = self.apply_tuned_lens_traslator(curr_act, key)
+                                
+                                logits_tok1 = torch.matmul(curr_act.to(self.unembed.device), tok1_unembed)
+                                logits_tok2 = torch.matmul(curr_act.to(self.unembed.device), tok2_unembed)
+
+                                    
+                                if logits_tok1 > logits_tok2:
+                                    total_tok1_greater_tok2 += 1
+                        
+                        logits = torch.tensor(total_tok1_greater_tok2 / len(token_directions))
                     else:
-                        direction_vector = self.unembed[direction]
+                        raise ValueError(f"Metric {metric} not supported")
+                            
+                            
+                    
+                    logit_lens[f"logit_lens_{key}"] = logits
 
-                    # Select activations and corresponding norm parameters
-                    curr_act = act[i] if len(act.shape) == 2 else act[i].reshape(-1, act.shape[-1])
-                    mean = last_layernorm_cached_parameters["mean"][i, :]
-                    variance = last_layernorm_cached_parameters["variance"][i, :]
-                    second_moment = last_layernorm_cached_parameters["second_moment"][i, :]
-
-                    # Apply LayerNorm
+                else:
                     if apply_norm:
-                        curr_act = self.apply_layernorm(curr_act, mean, variance, second_moment, key)
+                        mean = last_layernorm_cached_parameters["mean"]
+                        variance = last_layernorm_cached_parameters["variance"]
+                        second_moment = last_layernorm_cached_parameters["second_moment"]
 
-                    logits[i] = torch.matmul(curr_act.to(self.unembed.device), direction_vector)
+                        act = self.apply_layernorm(act, mean, variance, second_moment, key)
 
-                logit_lens[f"logit_lens_{key}"] = logits
-
-            else:
-                if apply_norm:
-                    mean = last_layernorm_cached_parameters["mean"]
-                    variance = last_layernorm_cached_parameters["variance"]
-                    second_moment = last_layernorm_cached_parameters["second_moment"]
-
-                    act = self.apply_layernorm(act, mean, variance, second_moment, key)
-
-                logits = torch.matmul(act.to(self.unembed.device), self.unembed.T)
-                if apply_softmax:
-                    logits = torch.softmax(logits, dim=-1)
-                logit_lens[f"logit_lens_{key}"] = logits
+                    logits = torch.matmul(act.to(self.unembed.device), self.unembed.T)
+                    if apply_softmax:
+                        logits = torch.softmax(logits, dim=-1)
+                    logit_lens[f"logit_lens_{key}"] = logits
 
         return logit_lens
+
+    def apply_tuned_lens_traslator(self, act, key):
+        """
+        Apply the tuned lens translator to the activations.
+
+        Args:
+            act (torch.Tensor): The activations to apply the tuned lens translator to.
+            key (str): The key to use for the tuned lens translator.
+
+        Returns:
+            torch.Tensor: The translated activations.
+        """
+        # get the layer number from the key both for resid_out and head_out. The key is in the format "resid_out_{i}" or "head_out_L{i}H{j}"
+        layer_number = int(re.search(r"\d+", key).group())
+        
+        if self.tuned_lens is None:
+            raise ValueError("Tuned lens not found. Please load the tuned lens first.")
+        
+        weight = self.tuned_lens[f"{layer_number}.weight"]
+        bias = self.tuned_lens[f"{layer_number}.bias"]
+        # move to the same device 
+        weight = weight.to(act.device)
+        # print("transp")
+        weight = weight.t()
+        bias = bias.to(act.device)
+        # Apply the tuned lens translator
+        act = F.linear(act, weight, bias)
+        return act
+        
+    
+        
+        

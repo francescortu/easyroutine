@@ -16,7 +16,7 @@ from transformers import (
     Gemma3Processor,
 )
 import random
-from typing import List, Literal, Union, Dict, Optional, Tuple
+from typing import List, Literal, Union, Dict, Optional, Tuple, Any
 import torch
 import yaml
 
@@ -63,6 +63,7 @@ class ModelConfig:
     attn_out_hook_name: str
     attn_o_proj_input_hook_name: str
     attn_matrix_hook_name: str
+    attn_matrix_pre_softmax_hook_name: str
     mlp_out_hook_name: str
     last_layernorm_hook_name: str
     
@@ -80,6 +81,23 @@ class ModelConfig:
     num_key_value_groups: int
     head_dim: int
     layernorm_type: Literal["RMS", "LayerNorm"]
+    
+    def use_language_model(self):
+        """
+        for the hook, remove the "language_model" prefix: "language_model.model.layers[{}]" -> "model.layers[{}]" . Remove from the data ckass
+        """
+        # iterate over the dataclass fields
+        for field in self.__dataclass_fields__.keys():
+            # remove the "language_model." prefix
+            if "hook" in field:
+                setattr(self, field, getattr(self, field).replace("language_model.", ""))
+            
+    def restore_full_model(self):
+        for field in self.__dataclass_fields__.keys():
+            if "hook" in field:
+                setattr(self, field, getattr(self, field).replace("model.","language_model.model."))
+    
+    
 
 # SPECIFIC MODEL CONFIGURATIONS
 
@@ -112,7 +130,7 @@ class ModelFactory:
         attn_implementation: str,
         torch_dtype: torch.dtype,
         device_map: str,
-    ):
+    ) -> Tuple[torch.nn.Module, Optional[torch.nn.Module], ModelConfig]:
         r"""
         Load the model and its configuration based on the model name.
 
@@ -152,10 +170,11 @@ class ModelFactory:
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
+                attn_matrix_pre_softmax_hook_name="model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                 last_layernorm_hook_name="model.norm.input",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="model.layers[{}].self_attn.o_proj.bias",
-                embed_tokens="model.embed_tokens.input",
+                embed_tokens="model.layers[0].input",
                 unembed_matrix="lm_head.weight",
                 last_layernorm="model.norm",
                 num_hidden_layers=model.config.num_hidden_layers,
@@ -195,7 +214,7 @@ class ModelFactory:
                     last_layernorm_hook_name="language_model.model.norm.input",
                     attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
                     attn_out_proj_bias="language_model.model.layers[{}].self_attn.o_proj.bias",
-                    embed_tokens="language_model.model.embed_tokens.input",
+                    embed_tokens="language_model.model.layers[0].input",
                     unembed_matrix="language_model.lm_head.weight",
                     last_layernorm="language_model.model.norm",
                     num_hidden_layers=model.language_model.config.num_hidden_layers,
@@ -225,11 +244,12 @@ class ModelFactory:
                     attn_o_proj_input_hook_name="language_model.model.layers[{}].self_attn.o_proj.input",
                     attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
                     attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
+                    attn_matrix_pre_softmax_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                     mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
                     last_layernorm_hook_name="language_model.model.norm.input",
                     attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
                     attn_out_proj_bias="language_model.model.layers[{}].self_attn.o_proj.bias",
-                    embed_tokens="language_model.model.embed_tokens.input",
+                    embed_tokens="language_model.model.layers[0].input",
                     unembed_matrix="language_model.lm_head.weight",
                     last_layernorm="language_model.model.norm",
                     num_hidden_layers=model.language_model.config.num_hidden_layers,
@@ -240,6 +260,7 @@ class ModelFactory:
                     head_dim=model.language_model.config.head_dim,
                     layernorm_type="RMS",
                 )
+                    
             else:
                 raise ValueError("Unsupported model_name")
             language_model = model.language_model
@@ -266,11 +287,12 @@ class ModelFactory:
                 attn_o_proj_input_hook_name="language_model.model.layers[{}].self_attn.o_proj.input",
                 attn_in_hook_name="language_model.model.layers[{}].self_attn.input",
                 attn_matrix_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_hook.output",
+                attn_matrix_pre_softmax_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                 mlp_out_hook_name="language_model.model.layers[{}].mlp.down_proj.output",
                 last_layernorm_hook_name="language_model.model.norm.input",
                 attn_out_proj_weight="language_model.model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="language_model.model.layers[{}].self_attn.o_proj.bias",
-                embed_tokens="language_model.model.embed_tokens.input",
+                embed_tokens="language_model.model.layers[0].input",
                 unembed_matrix="language_model.lm_head.weight",
                 last_layernorm="language_model.model.norm",
                 num_hidden_layers=model.language_model.config.num_hidden_layers,
@@ -282,6 +304,7 @@ class ModelFactory:
                 layernorm_type="RMS",
             )
             language_model = model.language_model
+
 
         elif model_name in ["hf-internal-testing/tiny-random-LlamaForCausalLM"]:
             model = LlamaForCausalLM.from_pretrained(
@@ -302,11 +325,12 @@ class ModelFactory:
                 attn_o_proj_input_hook_name="model.layers[{}].self_attn.o_proj.input",
                 attn_in_hook_name="model.layers[{}].self_attn.input",
                 attn_matrix_hook_name="model.layers[{}].self_attn.attention_matrix_hook.output",
+                attn_matrix_pre_softmax_hook_name="model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                 mlp_out_hook_name="model.layers[{}].mlp.down_proj.output",
                 last_layernorm_hook_name="model.norm.input",
                 attn_out_proj_weight="model.layers[{}].self_attn.o_proj.weight",
                 attn_out_proj_bias="model.layers[{}].self_attn.o_proj.bias",
-                embed_tokens="model.embed_tokens.input",
+                embed_tokens="model.layers[0].input",
                 unembed_matrix="lm_head.weight",
                 last_layernorm="model.norm",
                 num_hidden_layers=model.config.num_hidden_layers,
@@ -353,7 +377,7 @@ class ModelFactory:
     #         attn_matrix_hook_name=f"{prefix}layers[{{}}].self_attn.attention_matrix_hook.output",
     #         attn_out_proj_weight=f"{prefix}layers[{{}}].self_attn.o_proj.weight",
     #         attn_out_proj_bias=f"{prefix}layers[{{}}].self_attn.o_proj.bias",
-    #         embed_tokens=f"{prefix}embed_tokens.input",
+    #         embed_tokens=f"{prefix}layers[0].input",
     #         unembed_matrix=f"{prefix}lm_head.weight",
     #         last_norm_module=
     #         num_hidden_layers=model_config.num_hidden_layers,
@@ -467,6 +491,7 @@ class InputHandler:
         batch_dict: Dict[str, torch.Tensor],
         device: Union[str, torch.device],
         torch_dtype: torch.dtype = torch.bfloat16,
+        require_grads: bool = False,
     ):
         if self.model_name in [
             "facebook/chameleon-7b",
@@ -572,6 +597,9 @@ class InputHandler:
                     )
 
             input_dict[key] = value
+            
+        if require_grads:
+            input_dict["input_ids"].requires_grad = True
         return input_dict
 
     def get_input_ids(
@@ -579,3 +607,33 @@ class InputHandler:
         input_dict: Dict[str, torch.Tensor],
     ):
         return input_dict["input_ids"]
+
+    def cleanup_tensors(self, inputs: Dict[str, Any], others: Dict[str, Any] = None):
+        """
+        Clean up tensors to free GPU memory by detaching, moving to CPU, and deleting.
+        
+        Args:
+            inputs (Dict[str, Any]): Dictionary of input tensors (usually from prepare_inputs)
+            others (Dict[str, Any], optional): Dictionary of other tensors not in inputs
+            
+        Returns:
+            None
+        """
+        # Clean up inputs from the batch
+        if inputs is not None:
+            for k_in in list(inputs.keys()):  # Iterate over a copy of keys
+                if isinstance(inputs[k_in], torch.Tensor):
+                    inputs[k_in] = inputs[k_in].detach().cpu()
+                del inputs[k_in]
+            del inputs
+
+        # Clean up others from the batch
+        if others is not None:
+            for k_oth in list(others.keys()):
+                if isinstance(others[k_oth], torch.Tensor):
+                    others[k_oth] = others[k_oth].detach().cpu()
+                del others[k_oth]
+            del others
+
+        # Explicitly run garbage collection to free memory
+        torch.cuda.empty_cache()
