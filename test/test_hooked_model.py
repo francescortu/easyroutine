@@ -748,25 +748,25 @@ class TestHookedGemma3Model(BaseHookedModelTestCase):
             )
         )
         tokenizer = cls.MODEL.get_tokenizer()
-        messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": "You are a helpful assistant."}]
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": get_a_random_pil()},
-                    {"type": "text", "text": "Describe this image in detail."}
-                ]
-            }
-        ]
+        # messages = [
+        #     {
+        #         "role": "system",
+        #         "content": [{"type": "text", "text": "You are a helpful assistant."}]
+        #     },
+        #     {
+        #         "role": "user",
+        #         "content": [
+        #             {"type": "image", "image": get_a_random_pil()},
+        #             {"type": "text", "text": "Describe this image in detail."}
+        #         ]
+        #     }
+        # ]
 
-        cls.INPUTS  = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=True,
-            return_dict=True, return_tensors="pt"
-        )
-
+        # cls.INPUTS  = tokenizer.apply_chat_template(
+        #     messages, add_generation_prompt=True, tokenize=True,
+        #     return_dict=True, return_tensors="pt"
+        # )
+        cls.INPUTS = tokenizer(text="<start_of_image>", images=[get_a_random_pil()], return_tensors="pt")
         
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
         
