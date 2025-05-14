@@ -1097,32 +1097,34 @@ def attention_pattern_head(
             cache[f"pattern_L{layer}H{h}"] = pattern_slice
 
 
-def input_embedding_hook(module, args, kwargs, output, cache, cache_key, keep_gradient:bool = False):
+def input_embedding_hook(
+    module, args, kwargs, output, cache, cache_key, token_indexes, keep_gradient: bool = False, avg: bool = False
+):
     r"""
     Hook to capture the output of the embedding layer, enable gradients, and store it in the cache.
     """
-    embeddings_tensor = None
-    if isinstance(output, torch.Tensor):
-        embeddings_tensor = output
-    elif (
-        isinstance(output, tuple)
-        and len(output) > 0
-        and isinstance(output[0], torch.Tensor)
-    ):
-        # Handle cases where the module returns a tuple (e.g., (embeddings, other_data))
-        embeddings_tensor = output[0]
-    else:
-        logger.warning(
-            f"Could not identify embeddings tensor in output of {module} for gradient hooking. Output type: {type(output)}"
-        )
-        return output  # Pass through if format is unexpected
+    embeddings_tensor = process_args_kwargs_output(args, kwargs, output)
+   
     if keep_gradient:
         # Enable gradient tracking for the embeddings tensor
         embeddings_tensor.requires_grad_(True).retain_grad()
-        
-    if embeddings_tensor is not None:
+        cache[cache_key] = embeddings_tensor # we slice in the end if keep gradient
+        return restore_same_args_kwargs_output(embeddings_tensor, args, kwargs, output)  # Return the original (potentially modified in-place) output structure
+    if avg:
+        token_avgs = []
+        for token_tuple in token_indexes:
+            # Slice out the tokens specified by the tuple.
+            token_slice = embeddings_tensor[:, list(token_tuple), :]
+            # Average over the token dimension (dim=1) and keep that dimension.
+            token_avg = torch.mean(token_slice, dim=1, keepdim=True)
+            token_avgs.append(token_avg)
         cache[cache_key] = (
-            embeddings_tensor  # Store the tensor that's part of the graph
+            torch.cat(token_avgs, dim=1)  # Store the tensor that's part of the graph
+        )
+    else:
+        flatten_indexes = [item for tup in token_indexes for item in tup]
+        cache[cache_key] = (
+            embeddings_tensor[:,flatten_indexes,:]  # Store the tensor that's part of the graph
         )
 
     return (

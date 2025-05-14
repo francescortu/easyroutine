@@ -11,7 +11,19 @@ from rich.logging import RichHandler
 
 # Library-wide logger
 logger = logging.getLogger("easyroutine")
+_logged_once_messages = set()
 
+def warning_once(message: str):
+    """
+    Logs a warning message only once per runtime session.
+    Subsequent calls with the same message will be ignored.
+    """
+    if message not in _logged_once_messages:
+        _logged_once_messages.add(message)
+        logger.warning(message)
+
+# Attach the method to the logger for convenience
+logger.warning_once = warning_once
 
 def setup_default_logging():
     """

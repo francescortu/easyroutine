@@ -42,9 +42,9 @@ def conditional_no_grad(flag_attr: str = "keep_gradient"):
             ecfg  = bound.arguments.get("extraction_config", None)
 
             # 2. Decide whether we need gradients
-            grad = getattr(ecfg, flag_attr, True)
+            grad = getattr(ecfg, flag_attr, False)
             if grad:
-                logger.warning("Gradient enabled!")
+                logger.warning_once("Gradient enabled!")
             # 3. Run the function with or without grad tracking
             with torch.set_grad_enabled(grad):
                 return fn(*args, **kwargs)

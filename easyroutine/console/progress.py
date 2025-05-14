@@ -23,3 +23,4 @@ def get_progress_bar(disable:bool = False):
             TimeRemainingColumn(),
         )
 
+progress_bar = get_progress_bar()
