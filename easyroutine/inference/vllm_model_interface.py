@@ -11,7 +11,7 @@ class VLLMInferenceModel(BaseInferenceModel):
 
     def __init__(self, config: BaseInferenceModelConfig):
         super().__init__(config)
-        self.model = LLM(model=config.model_name, n_gpus=config.n_gpus, dtype=config.dtype)
+        self.model = LLM(model=config.model_name, tensor_parallel_size=config.n_gpus, dtype=config.dtype)
         
         
     def convert_chat_messages_to_custom_format(self, chat_messages: List[dict[str, str]]) -> List[dict[str, str]]:
