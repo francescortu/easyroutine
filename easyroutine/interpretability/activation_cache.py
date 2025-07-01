@@ -183,6 +183,12 @@ class ActivationCache:
         self.register_aggregation("mapping_index", just_old)
         self.register_aggregation("input_ids", just_me)
         self.register_aggregation("offset", sublist)
+        
+    def is_empty(self) -> bool:
+        """
+        Returns True if the cache is empty, False otherwise.
+        """
+        return len(self.cache) == 0
 
     def get(self, key: str, default=None):
         return self.cache.get(key, default)
