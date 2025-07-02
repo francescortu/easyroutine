@@ -1,2 +1,2 @@
 from easyroutine.inference.base_model_interface import BaseInferenceModelConfig
-from easyroutine.inference.vllm_model_interface import VLLMInferenceModel
+from easyroutine.inference.vllm_model_interface import VLLMInferenceModel, VLLMInferenceModelConfig

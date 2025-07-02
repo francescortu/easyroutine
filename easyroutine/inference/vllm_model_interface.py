@@ -2,7 +2,12 @@ from easyroutine.inference.base_model_interface import BaseInferenceModel, BaseI
 from vllm import LLM, SamplingParams
 from typing import Union, List, Literal
 from vllm.entrypoints.chat_utils import ChatCompletionMessageParam
+from dataclasses import dataclass
 
+@dataclass
+class VLLMInferenceModelConfig(BaseInferenceModelConfig):
+    """just a placeholder for now, as we don't have any specific config for VLLM."""
+    
 class VLLMInferenceModel(BaseInferenceModel):
     """
     VLLM inference model interface.
