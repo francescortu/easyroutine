@@ -7,7 +7,6 @@ from easyroutine.interpretability.hooked_model import HookedModel
 from easyroutine.interpretability.models import ModelConfig
 from easyroutine.logger import logger
 from easyroutine.console import progress_bar
-from tqdm import tqdm
 from copy import deepcopy
 import re
 from pathlib import Path

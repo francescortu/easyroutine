@@ -26,6 +26,9 @@ class MockHookedModel:
     def __init__(self):
         self.config = MockHookedModelConfig()
 
+    def __str__(self):
+        return self.config.model_name
+
 
 class MockExtractionConfig(ExtractionConfig):
     """Mocking the ExtractionConfig for test usage."""
@@ -68,9 +71,12 @@ class TestActivationSaver(unittest.TestCase):
         target_positions = [1, 2]
         interventions = None  # Updated to match current signature
 
+        # Use the model_name string instead of the MockHookedModel object
+        model_name = self.mock_model.config.model_name
+
         save_dir = self.saver.save(
             activations,
-            self.mock_model,
+            model_name,  # Pass the model name string directly
             target_positions,
             interventions,  # Updated to match current signature
             self.mock_extraction_config,
@@ -105,9 +111,12 @@ class TestActivationSaver(unittest.TestCase):
         interventions = None
         tag = "test_tag"
 
+        # Use the model_name string instead of the MockHookedModel object
+        model_name = self.mock_model.config.model_name
+
         save_dir = self.saver.save(
             activations,
-            self.mock_model,
+            model_name,
             target_positions,
             interventions,
             self.mock_extraction_config,
@@ -125,16 +134,19 @@ class TestActivationSaver(unittest.TestCase):
         activations = torch.tensor([4, 5, 6])
         target_positions = [1, 2]
 
+        # Use the model_name string instead of the MockHookedModel object
+        model_name = self.mock_model.config.model_name
+
         self.saver.save(
             activations,
-            self.mock_model,
+            model_name,
             target_positions,
             None,  # interventions
             self.mock_extraction_config,
         )
 
         # Verify the old experiment directory exists
-        old_exp_dir = self.temp_dir / "test_experiment"
+        old_exp_dir = Path(self.temp_dir) / "test_experiment"
         self.assertTrue(old_exp_dir.exists())
 
         # Rename the experiment
@@ -143,7 +155,7 @@ class TestActivationSaver(unittest.TestCase):
 
         # Check that the old directory is gone and the new directory exists
         self.assertFalse(old_exp_dir.exists())
-        new_exp_dir = self.temp_dir / new_exp_name
+        new_exp_dir = Path(self.temp_dir) / new_exp_name
         self.assertTrue(new_exp_dir.exists())
 
         # Check that the saver's experiment name was updated
@@ -315,10 +327,10 @@ class TestActivationLoader(unittest.TestCase):
         self.assertEqual(loader.base_dir, Path(self.temp_dir))
         self.assertEqual(loader.exp_name, "some_exp")
 
-    @patch("os.environ.get", return_value="/fake/path")
+    @patch("os.environ.get", return_value=None)
     def test_loader_from_env(self, mock_env):
         with self.assertRaises(ValueError):
-            # If the env is /fake/path but doesn't exist, still an error or fallback
+            # Test that ValueError is raised when ACTIVATION_BASE_DIR is not set
             ActivationLoader.from_env(experiment_name="test_env")
 
     def test_loader_from_saver(self):
