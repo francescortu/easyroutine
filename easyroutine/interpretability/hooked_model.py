@@ -509,52 +509,15 @@ class HookedModel:
         """
         Create a HookedModel instance from a pretrained model.
         
-        This convenience class method provides a simple interface for loading
-        pretrained models without explicitly creating a HookedModelConfig object.
-        It automatically constructs the configuration with the provided parameters
-        and initializes the HookedModel.
-        
         Args:
-            model_name (str): The identifier of the pretrained model to load.
-                Can be:
-                - A Hugging Face model repository name (e.g., "gpt2", "mistral-7b")
-                - A local path to a model directory
-                - Any model supported by the transformers library
-            **kwargs: Additional keyword arguments to pass to HookedModelConfig.
-                Common options include:
-                - device_map: Device placement strategy ("auto", "cuda", "cpu", "balanced")
-                - torch_dtype: Data type for model parameters (torch.float16, torch.bfloat16, etc.)
-                - attn_implementation: Attention implementation ("eager", "custom_eager")
-                - batch_size: Batch size for inference (default: 1)
+            model_name (str): Model name or path.
+            **kwargs: Additional arguments for HookedModelConfig.
         
         Returns:
-            HookedModel: A fully initialized HookedModel instance ready for
-                interpretability analysis.
+            HookedModel: Initialized model instance.
         
         Example:
-            >>> # Basic model loading
             >>> model = HookedModel.from_pretrained("gpt2")
-            
-            >>> # With custom configuration
-            >>> model = HookedModel.from_pretrained(
-            ...     "mistral-7b",
-            ...     device_map="auto",
-            ...     torch_dtype=torch.bfloat16,
-            ...     attn_implementation="custom_eager"
-            ... )
-            
-            >>> # Local model loading
-            >>> model = HookedModel.from_pretrained(
-            ...     "/path/to/local/model",
-            ...     device_map="cuda"
-            ... )
-        
-        Note:
-            This method is equivalent to:
-            ```python
-            config = HookedModelConfig(model_name=model_name, **kwargs)
-            model = HookedModel(config)
-            ```
         """
 
     def assert_module_exists(self, component: str):

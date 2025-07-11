@@ -149,27 +149,12 @@ chat_history = model.append_with_chat_template(
 response = model.generate_with_chat_template(chat_history)
 ```
 
-## 📊 Smart Progress Tracking
-
-EasyRoutine automatically adapts progress display to your environment:
-
-```python
-from easyroutine.console import progress
-
-# Works great in Jupyter notebooks, terminals, and batch jobs
-for item in progress(large_dataset, description="Processing data"):
-    result = expensive_computation(item)
-
-# In interactive environments: rich progress bar with ETA
-# In batch jobs (SLURM, etc.): clean timestamped logging
-# [2024-01-15 10:30:15] Processing data: 1500/10000 (15.0%) - Elapsed: 2.3m, Remaining: 13.1m
-```
-
 ## 🛠️ Utilities & Logging
 
 ```python
 from easyroutine.logger import setup_logging, logger
 from easyroutine import path_to_parents
+from easyroutine.console import progress
 
 # Flexible logging setup
 setup_logging(
@@ -183,26 +168,15 @@ logger.info("Starting experiment...")
 
 # Convenient navigation helpers
 path_to_parents(2)  # Go up 2 directory levels
+
+# Smart progress tracking that adapts to your environment
+for item in progress(large_dataset, description="Processing data"):
+    result = expensive_computation(item)
+
+# In interactive environments: rich progress bar with ETA
+# In batch jobs (SLURM, etc.): clean timestamped logging
+# [2024-01-15 10:30:15] Processing data: 1500/10000 (15.0%) - Elapsed: 2.3m, Remaining: 13.1m
 ```
-
-## 🎯 Use Cases
-
-**Mechanistic Interpretability Research**
-- Analyze attention patterns in transformer models
-- Study information flow through residual streams
-- Perform activation patching experiments
-- Investigate emergent capabilities in language models
-
-**Model Analysis & Debugging** 
-- Extract internal representations for analysis
-- Compare activations across different model variants
-- Debug model behavior on specific inputs
-- Understand failure modes and edge cases
-
-**Educational & Research**
-- Teaching transformer internals with hands-on exploration
-- Rapid prototyping of interpretability experiments  
-- Reproducible research with comprehensive activation logging
 
 ## 📖 Documentation
 
