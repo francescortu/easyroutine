@@ -1199,8 +1199,9 @@ class HookedModel:
         """
         # Initialize cache for logits
         # raise NotImplementedError("This method is not working. It needs to be fixed")
+        cache = ActivationCache()
         hook_handlers = None
-        if target_token_positions is not None:
+        if target_token_positions is not None or self.additional_interventions is not None:
             string_tokens = self.to_string_tokens(
                 self.input_handler.get_input_ids(inputs).squeeze()
             )
@@ -1213,7 +1214,7 @@ class HookedModel:
                 inputs=inputs,
                 token_dict=token_dict,
                 token_indexes=token_indexes,
-                cache=ActivationCache(),
+                cache=cache,
                 **kwargs,
             )
             hook_handlers = self.set_hooks(hooks)
@@ -1223,12 +1224,15 @@ class HookedModel:
         output = self.hf_model.generate(
             **inputs,  # type: ignore
             generation_config=generation_config,
-            output_scores=False,  # type: ignore
+            # output_scores=False,  # type: ignore
         )
         if hook_handlers:
             self.remove_hooks(hook_handlers)
         if return_text:
             return self.hf_tokenizer.decode(output[0], skip_special_tokens=True)  # type: ignore
+        if not cache.is_empty():
+            # if the cache is not empty, we will return the cache
+            output = {"generation_output": output, "cache": cache}
         return output  # type: ignore
 
     def extract_cache(
