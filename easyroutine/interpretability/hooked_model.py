@@ -366,7 +366,20 @@ class ExtractionConfig:
         )
 
     def to_dict(self):
-        return self.__dict__
+        """
+        Convert the configuration to a dictionary representation.
+        
+        Returns:
+            dict: Dictionary containing all configuration attributes as key-value pairs.
+                Useful for serialization, logging, or passing to other functions
+                that expect dictionary arguments.
+        
+        Example:
+            >>> config = ExtractionConfig(extract_resid_out=True, save_logits=True)
+            >>> config_dict = config.to_dict()
+            >>> print(config_dict)
+            {'extract_embed': False, 'extract_resid_out': True, ...}
+        """
 
 
 class HookedModel:
