@@ -116,20 +116,29 @@ def compute_statistics(tensor, dim=-1, keepdim=True, eps=1e-6):
 
 
 def layernom_hook(
-    module, args, kwargs, output, token_indexes, cache, cache_key, avg: bool = False
+    module, args, kwargs, output, token_indexes, cache, cache_key, avg: bool = False, keep_gradient: bool = False
 ):
     b = process_args_kwargs_output(args, kwargs, output)
     if avg:
         token_avgs = []
         for token_index in token_indexes:
-            slice_ = b.data.detach().clone()[..., list(token_index), :]
+            if keep_gradient:
+                slice_ = b[..., list(token_index), :]
+                slice_.requires_grad_(True).retain_grad()
+            else:
+                slice_ = b.data.detach().clone()[..., list(token_index), :]
             mean, variance, second_moment = compute_statistics(slice_)
             token_avgs.append(
                 {"mean": mean, "variance": variance, "second_moment": second_moment}
             )
         cache[cache_key] = token_avgs
     flatten_indexes = [item for sublist in token_indexes for item in sublist]
-    mean, variance, second_moment = compute_statistics(b[..., flatten_indexes, :])
+    if keep_gradient:
+        activation_tensor = b[..., flatten_indexes, :]
+        activation_tensor.requires_grad_(True).retain_grad()
+        mean, variance, second_moment = compute_statistics(activation_tensor)
+    else:
+        mean, variance, second_moment = compute_statistics(b[..., flatten_indexes, :])
     cache[cache_key] = {
         "mean": mean,
         "variance": variance,
@@ -147,6 +156,7 @@ def save_resid_hook(
     cache_key,
     token_indexes,
     avg: bool = False,
+    keep_gradient: bool = False,
 ):
     r"""
     It save the activations of the residual stream in the cache. It will save the activations in the cache (a global variable out the scope of the function)
@@ -157,7 +167,11 @@ def save_resid_hook(
     if avg:
         token_avgs = []
         for token_index in token_indexes:
-            slice_ = b.data.detach().clone()[..., list(token_index), :]
+            if keep_gradient:
+                slice_ = b[..., list(token_index), :]
+                slice_.requires_grad_(True).retain_grad()
+            else:
+                slice_ = b.data.detach().clone()[..., list(token_index), :]
             token_avgs.append(torch.mean(slice_, dim=-2, keepdim=True))
 
         # cache[cache_key] = torch.cat(token_avgs, dim=-2)
@@ -169,7 +183,12 @@ def save_resid_hook(
 
     else:
         flatten_indexes = [item for sublist in token_indexes for item in sublist]
-        cache[cache_key] = b.data.detach().clone()[..., flatten_indexes, :]
+        if keep_gradient:
+            activation_tensor = b[..., flatten_indexes, :]
+            activation_tensor.requires_grad_(True).retain_grad()
+            cache[cache_key] = activation_tensor
+        else:
+            cache[cache_key] = b.data.detach().clone()[..., flatten_indexes, :]
 
 
 def intervention_resid_hook(
@@ -213,6 +232,7 @@ def query_key_value_hook(
     num_key_value_groups: int,
     head: Union[str, int] = "all",
     avg: bool = False,
+    keep_gradient: bool = False,
 ):
     r"""
     Same as save_resid_hook but for the query, key and value vectors, it just have a reshape to have the head dimension.
@@ -232,10 +252,18 @@ def query_key_value_hook(
         # Decide whether to use group_idx or head_idx based on cache_key.
         if "values_" in cache_key or "keys_" in cache_key:
             # Select the slice corresponding to the group index.
-            tensor_slice = b.data.detach().clone()[:, group_idx, ...]
+            if keep_gradient:
+                tensor_slice = b[:, group_idx, ...]
+                tensor_slice.requires_grad_(True).retain_grad()
+            else:
+                tensor_slice = b.data.detach().clone()[:, group_idx, ...]
         else:
             # Use the head index directly.
-            tensor_slice = b.data.detach().clone()[:, head_idx, ...]
+            if keep_gradient:
+                tensor_slice = b[:, head_idx, ...]
+                tensor_slice.requires_grad_(True).retain_grad()
+            else:
+                tensor_slice = b.data.detach().clone()[:, head_idx, ...]
 
         # Process the token indexes.
         if avg:
@@ -303,6 +331,7 @@ def head_out_hook(
     o_proj_bias,
     head: Union[str, int] = "all",
     avg: bool = False,
+    keep_gradient: bool = False,
 ):
     b = process_args_kwargs_output(args, kwargs, output)
 
@@ -325,6 +354,10 @@ def head_out_hook(
 
     if o_proj_bias is not None:
         projected_values = projected_values + o_proj_bias // num_heads
+
+    # Enable gradient tracking if needed
+    if keep_gradient:
+        projected_values.requires_grad_(True).retain_grad()
 
     # Process token indexes from projected_values of shape [batch, tokens, num_heads, d_model]
     if avg:

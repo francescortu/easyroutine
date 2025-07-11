@@ -515,6 +515,7 @@ class HookedModel:
                         cache_key=f"resid_out_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -532,6 +533,7 @@ class HookedModel:
                         cache_key=f"resid_in_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -549,6 +551,7 @@ class HookedModel:
                         cache_key=f"resid_in_post_layernorm_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -596,6 +599,7 @@ class HookedModel:
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -615,6 +619,7 @@ class HookedModel:
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -634,6 +639,7 @@ class HookedModel:
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -663,6 +669,7 @@ class HookedModel:
                             self.hf_model,
                             self.model_config.attn_out_proj_bias.format(i),
                         ),
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -678,6 +685,7 @@ class HookedModel:
                         cache_key=f"attn_in_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -693,6 +701,7 @@ class HookedModel:
                         cache_key=f"attn_out_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -733,6 +742,7 @@ class HookedModel:
                         cache_key=f"resid_mid_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -749,6 +759,7 @@ class HookedModel:
                         cache_key=f"mlp_out_{i}",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
                 for i in range(0, self.model_config.num_hidden_layers)
@@ -764,6 +775,7 @@ class HookedModel:
                         cache_key="last_layernorm",
                         token_indexes=token_indexes,
                         avg=extraction_config.avg,
+                        keep_gradient=extraction_config.keep_gradient,
                     ),
                 }
             ]
@@ -1066,9 +1078,9 @@ class HookedModel:
 
         if extraction_config.keep_gradient:
             assert vocabulary_index is not None, (
-                "dict_token_index must be provided if extract_input_embeddings_for_grad is True"
+                "vocabulary_index must be provided if keep_gradient is True"
             )
-            self._compute_input_gradients(cache, output.logits, vocabulary_index)
+            self._compute_gradients(cache, output.logits, vocabulary_index)
 
         return cache
 
@@ -1615,33 +1627,28 @@ class HookedModel:
         logger.debug("HookedModel: Aggregation finished")
         return all_cache
 
-    def _compute_input_gradients(self, cache, logits, vocabulary_index):
+    def _compute_gradients(self, cache, logits, vocabulary_index):
         """
-        Private method to compute gradients of logits with respect to input embeddings.
+        Private method to compute gradients of logits with respect to all activations with gradients enabled.
 
         Args:
-            cache (ActivationCache): Cache containing logits and input_embeddings
+            cache (ActivationCache): Cache containing activations with gradients enabled
             logits (torch.Tensor): Model output logits
             vocabulary_index (int): Index in the vocabulary for which to compute gradients
 
         Returns:
             bool: True if gradients were successfully computed, False otherwise
         """
-
-        supported_keys = ["input_embeddings"]
-
-        if any(key not in cache for key in supported_keys):
+        # Find all keys in cache that have gradient-enabled tensors
+        gradient_keys = []
+        for key, value in cache.items():
+            if isinstance(value, torch.Tensor) and value.requires_grad:
+                gradient_keys.append(key)
+        
+        if not gradient_keys:
             logger.warning(
-                f"Cannot compute gradients: {supported_keys} not found in cache. "
-                "Ensure extraction_config.extract_embed is True."
-            )
-            return False
-
-        input_embeds = cache["input_embeddings"]
-
-        if not input_embeds.requires_grad:
-            logger.warning(
-                "Cannot compute gradients: input embeddings do not require gradients."
+                "Cannot compute gradients: No tensors with gradients found in cache. "
+                "Ensure extraction_config.keep_gradient is True for relevant activations."
             )
             return False
 
@@ -1649,34 +1656,44 @@ class HookedModel:
         target_logits = logits[0, -1, vocabulary_index]
 
         # Zero out existing gradients if any
-        if input_embeds.grad is not None:
-            input_embeds.grad.zero_()
+        for key in gradient_keys:
+            tensor = cache[key]
+            if tensor.grad is not None:
+                tensor.grad.zero_()
 
-        # try:
-        # Backward pass - use retain_graph=False to free memory after each backward pass
-        target_logits.backward(retain_graph=False)
+        try:
+            # Backward pass - use retain_graph=False to free memory after each backward pass
+            target_logits.backward(retain_graph=False)
 
-        # Store the computed gradients before they're cleared
-        for key in supported_keys:
-            if key in cache and input_embeds.grad is not None:
-                cache[key + "_gradients"] = input_embeds.grad.detach().clone()
+            # Store the computed gradients before they're cleared
+            for key in gradient_keys:
+                tensor = cache[key]
+                if tensor.grad is not None:
+                    cache[key + "_gradients"] = tensor.grad.detach().clone()
+                    logger.debug(f"Computed gradients for {key}")
 
-        # Process token slicing
-        tupled_indexes = tuple(cache["token_dict"].values())
-        flatten_indexes = [item for sublist in tupled_indexes for item in sublist]
-        for key in supported_keys:
-            cache[key] = cache[key][..., flatten_indexes, :].detach()
-            if key + "_gradients" in cache:
-                cache[key + "_gradients"] = cache[key + "_gradients"][
-                    ..., flatten_indexes, :
-                ].detach()
+            # Process token slicing for tensors that need it
+            # Only slice if we have token_dict (which is used for token indexing)
+            if "token_dict" in cache:
+                tupled_indexes = tuple(cache["token_dict"].values())
+                flatten_indexes = [item for sublist in tupled_indexes for item in sublist]
+                
+                for key in gradient_keys:
+                    # Only slice if the tensor has the expected shape (has token dimension)
+                    tensor = cache[key]
+                    if len(tensor.shape) >= 3:  # batch, token, feature dims
+                        cache[key] = tensor[..., flatten_indexes, :].detach()
+                        if key + "_gradients" in cache:
+                            cache[key + "_gradients"] = cache[key + "_gradients"][
+                                ..., flatten_indexes, :
+                            ].detach()
 
-        # Explicitly free memory
-        torch.cuda.empty_cache()
-        return True
+            # Explicitly free memory
+            torch.cuda.empty_cache()
+            return True
 
-        # except RuntimeError as e:
-        #     logger.error(f"Error computing gradients: {e}")
-        #     # Ensure memory is freed even in case of error
-        #     torch.cuda.empty_cache()
-        #     return False
+        except RuntimeError as e:
+            logger.error(f"Error computing gradients: {e}")
+            # Ensure memory is freed even in case of error
+            torch.cuda.empty_cache()
+            return False

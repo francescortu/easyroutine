@@ -562,13 +562,89 @@ class BaseHookedModelTestCase(unittest.TestCase):
                 extract_embed=True, 
                 keep_gradient=True
             ),
-            dict_token_index=torch.tensor([0, 1]),
         )
         # assert the presence of the keys
         self.assertIn("input_embeddings_gradients", cache_with_gradients)
         self.assertEqual(
             cache_with_gradients["input_embeddings_gradients"].shape, cache_with_gradients["input_embeddings"].shape
         )
+
+    def test_unified_gradient_support_for_all_activations(self):
+        """Test that gradients can be computed for all activation types, not just input embeddings."""
+        cache_with_gradients = self.MODEL.forward(
+            self.INPUTS,
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_embed=True,
+                extract_resid_out=True,
+                extract_resid_in=True,
+                extract_attn_out=True,
+                extract_attn_in=True,
+                extract_mlp_out=True,
+                keep_gradient=True
+            ),
+            vocabulary_index=123
+        )
+        
+        # Check that we have gradients for multiple activation types
+        gradient_keys = [key for key in cache_with_gradients.keys() if key.endswith("_gradients")]
+        
+        # Should have gradients for at least input embeddings
+        self.assertIn("input_embeddings_gradients", gradient_keys)
+        
+        # Should also have gradients for other activations that were extracted with keep_gradient=True
+        expected_base_keys = ["input_embeddings", "resid_out_0", "resid_in_0", "attn_out_0", "attn_in_0", "mlp_out_0"]
+        found_gradient_keys = []
+        
+        for base_key in expected_base_keys:
+            if base_key in cache_with_gradients and f"{base_key}_gradients" in cache_with_gradients:
+                found_gradient_keys.append(f"{base_key}_gradients")
+                # Check that gradient shape matches activation shape
+                self.assertEqual(
+                    cache_with_gradients[f"{base_key}_gradients"].shape,
+                    cache_with_gradients[base_key].shape,
+                    f"Gradient shape mismatch for {base_key}"
+                )
+        
+        # Should have found gradients for multiple activation types
+        self.assertGreater(len(found_gradient_keys), 1, 
+                          f"Expected gradients for multiple activation types, found: {found_gradient_keys}")
+        
+        print(f"Successfully computed gradients for: {found_gradient_keys}")
+
+    def test_gradient_support_with_different_extraction_configs(self):
+        """Test that gradients are only computed for activations that are actually extracted."""
+        # Test with only resid_out extraction
+        cache1 = self.MODEL.forward(
+            self.INPUTS,
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True,
+                keep_gradient=True
+            ),
+            vocabulary_index=123
+        )
+        
+        # Should have resid_out but not input_embeddings
+        self.assertIn("resid_out_0", cache1)
+        self.assertNotIn("input_embeddings", cache1)
+        
+        # Test with only input embeddings extraction
+        cache2 = self.MODEL.forward(
+            self.INPUTS,
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_embed=True,
+                keep_gradient=True
+            ),
+            vocabulary_index=123
+        )
+        
+        # Should have input_embeddings but not resid_out
+        self.assertIn("input_embeddings", cache2)
+        self.assertNotIn("resid_out_0", cache2)
+        
+        print("✓ Gradient computation correctly respects extraction configuration")
 
     def test_module_wrapper(self):
         """
