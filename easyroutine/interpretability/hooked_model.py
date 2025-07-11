@@ -493,7 +493,56 @@ class HookedModel:
 
     @classmethod
     def from_pretrained(cls, model_name: str, **kwargs):
-        return cls(HookedModelConfig(model_name=model_name, **kwargs))
+        """
+        Create a HookedModel instance from a pretrained model.
+        
+        This convenience class method provides a simple interface for loading
+        pretrained models without explicitly creating a HookedModelConfig object.
+        It automatically constructs the configuration with the provided parameters
+        and initializes the HookedModel.
+        
+        Args:
+            model_name (str): The identifier of the pretrained model to load.
+                Can be:
+                - A Hugging Face model repository name (e.g., "gpt2", "mistral-7b")
+                - A local path to a model directory
+                - Any model supported by the transformers library
+            **kwargs: Additional keyword arguments to pass to HookedModelConfig.
+                Common options include:
+                - device_map: Device placement strategy ("auto", "cuda", "cpu", "balanced")
+                - torch_dtype: Data type for model parameters (torch.float16, torch.bfloat16, etc.)
+                - attn_implementation: Attention implementation ("eager", "custom_eager")
+                - batch_size: Batch size for inference (default: 1)
+        
+        Returns:
+            HookedModel: A fully initialized HookedModel instance ready for
+                interpretability analysis.
+        
+        Example:
+            >>> # Basic model loading
+            >>> model = HookedModel.from_pretrained("gpt2")
+            
+            >>> # With custom configuration
+            >>> model = HookedModel.from_pretrained(
+            ...     "mistral-7b",
+            ...     device_map="auto",
+            ...     torch_dtype=torch.bfloat16,
+            ...     attn_implementation="custom_eager"
+            ... )
+            
+            >>> # Local model loading
+            >>> model = HookedModel.from_pretrained(
+            ...     "/path/to/local/model",
+            ...     device_map="cuda"
+            ... )
+        
+        Note:
+            This method is equivalent to:
+            ```python
+            config = HookedModelConfig(model_name=model_name, **kwargs)
+            model = HookedModel(config)
+            ```
+        """
 
     def assert_module_exists(self, component: str):
         # Remove '.input' or '.output' from the component
@@ -583,17 +632,59 @@ class HookedModel:
             logger.debug("HookedModel: Using only language model capabilities")
 
     def get_tokenizer(self):
-        return self.hf_tokenizer
+        """
+        Get the primary tokenizer associated with this model.
+        
+        Returns the tokenizer that was loaded during model initialization.
+        For vision-language models, this may be a processor that includes
+        both text tokenization and image processing capabilities.
+        
+        Returns:
+            Union[transformers.PreTrainedTokenizer, transformers.ProcessorMixin]:
+                The tokenizer or processor associated with the model.
+        
+        Example:
+            >>> model = HookedModel.from_pretrained("gpt2")
+            >>> tokenizer = model.get_tokenizer()
+            >>> tokens = tokenizer("Hello world", return_tensors="pt")
+        
+        Note:
+            For text-only models, this returns a standard tokenizer.
+            For vision-language models, this may return a processor that
+            handles both text and image inputs. Use get_text_tokenizer()
+            if you specifically need the text tokenization component.
+        """
 
     def get_text_tokenizer(self):
-        r"""
-        If the tokenizer is a processor, return just the tokenizer. If the tokenizer is a tokenizer, return the tokenizer
-
-        Args:
-            None
-
+        """
+        Get the text tokenization component of the model's tokenizer.
+        
+        For vision-language models that use a processor (which combines text
+        tokenization and image processing), this method extracts and returns
+        just the text tokenizer component. For text-only models, this returns
+        the same tokenizer as get_tokenizer().
+        
         Returns:
-            tokenizer: the tokenizer of the model
+            transformers.PreTrainedTokenizer: The text tokenizer component.
+        
+        Raises:
+            ValueError: If the model uses a processor that doesn't have a
+                tokenizer attribute.
+        
+        Example:
+            >>> # For a vision-language model
+            >>> model = HookedModel.from_pretrained("llava-v1.6-mistral-7b-hf")
+            >>> text_tokenizer = model.get_text_tokenizer()
+            >>> tokens = text_tokenizer("Hello world", return_tensors="pt")
+            
+            >>> # For a text-only model (same as get_tokenizer())
+            >>> model = HookedModel.from_pretrained("gpt2")
+            >>> text_tokenizer = model.get_text_tokenizer()
+        
+        Note:
+            This method is particularly useful when you need to perform
+            text-specific operations on vision-language models where the
+            primary tokenizer is actually a multimodal processor.
         """
         if self.processor is not None:
             if not hasattr(self.processor, "tokenizer"):
@@ -1501,31 +1592,108 @@ class HookedModel:
         # save_other_batch_elements: bool = False,
         **kwargs,
     ):
-        r"""
-        Method to extract the activations of the model from a specific dataset. Compute a forward pass for each batch of the dataloader and save the activations in the cache.
-
-        Arguments:
-            - dataloader (iterable): dataloader with the dataset. Each element of the dataloader must be a dictionary that contains the inputs that the model expects (input_ids, attention_mask, pixel_values ...)
-            - extracted_token_position (Union[Union[str, int, Tuple[int, int]], List[Union[str, int, Tuple[int, int]]]]): list of tokens to extract the activations from (["last", "end-image", "start-image", "first", -1, (2,10)]). See TokenIndex.get_token_index for more details
-            - batch_saver (Callable): function to save in the cache the additional element from each elemtn of the batch (For example, the labels of the dataset)
-            - move_to_cpu_after_forward (bool): if True, move the activations to the cpu right after the any forward pass of the model
-            - dict_token_index (Optional[torch.Tensor]): If provided, specifies the index in the vocabulary for which to compute gradients of logits with respect to input embeddings. Requires extraction_config.extract_input_embeddings_for_grad to be True.
-            - **kwargs: additional arguments to control hooks generation, basically accept any argument handled by the `.forward` method (i.e. ablation_queries, patching_queries, extract_resid_in)
-
+        """
+        Extract internal model activations from a dataset using forward passes.
+        
+        This is the primary method for extracting activations from the model for
+        interpretability analysis. It processes each batch in the dataloader,
+        performs forward passes while capturing specified activations, and
+        aggregates results into a comprehensive activation cache.
+        
+        The method supports flexible extraction configurations, allowing users to
+        specify exactly which model components to monitor and which token positions
+        to extract from. It can handle both text-only and multimodal inputs.
+        
+        Args:
+            dataloader (Iterable[Dict]): An iterable containing batches of model inputs.
+                Each element must be a dictionary containing the inputs that the model
+                expects (e.g., input_ids, attention_mask, pixel_values for VLMs).
+                Common format: {"input_ids": tensor, "attention_mask": tensor, ...}
+                
+            target_token_positions (Union[List[Union[str, int, Tuple[int, int]]], ...]):
+                Specification of which token positions to extract activations from.
+                Supports multiple formats:
+                - Strings: "last", "first", "end-image", "start-image", "all", etc.
+                - Integers: Specific token indices (e.g., -1 for last token)
+                - Tuples: Token ranges (e.g., (2, 10) for positions 2 through 10)
+                - Mixed lists: Combinations of the above types
+                See TokenIndex.get_token_index for complete specification.
+                
+            extraction_config (ExtractionConfig, optional): Configuration object
+                specifying which activations to extract from the model.
+                Controls extraction from residual streams, attention mechanisms,
+                MLP layers, etc. Defaults to ExtractionConfig() (basic config).
+                
+            interventions (List[Intervention], optional): List of intervention
+                objects to apply during forward passes. Enables ablation studies,
+                activation patching, and other causal analysis methods.
+                Defaults to None (no interventions).
+                
+            batch_saver (Callable, optional): Function to extract and save additional
+                information from each batch element (e.g., labels, metadata).
+                Should take a batch element and return a dictionary of items to save.
+                Defaults to lambda x: None (no additional saving).
+                
+            move_to_cpu_after_forward (bool, optional): Whether to move extracted
+                activations to CPU immediately after each forward pass. Helps
+                manage GPU memory usage for large datasets. Defaults to True.
+                
+            **kwargs: Additional keyword arguments passed to the forward method.
+                Can include ablation_queries, patching_queries, and other parameters
+                for controlling hook generation and intervention behavior.
+        
         Returns:
-            final_cache: dictionary with the activations of the model. The keys are the names of the activations and the values are the activations themselve
-
-        Examples:
-            >>> dataloader = [{"input_ids": torch.tensor([[101, 1234, 1235, 102]]), "attention_mask": torch.tensor([[1, 1, 1, 1]]), "labels": torch.tensor([1])}, ...]
-            >>> model.extract_cache(dataloader, extracted_token_position=["last"], batch_saver=lambda x: {"labels": x["labels"]})
-            {'resid_out_0': tensor([[[0.1, 0.2, 0.3, 0.4]]], grad_fn=<CopyBackwards>), 'labels': tensor([1]), 'mapping_index': {'last': [0]}}
+            ActivationCache: A comprehensive cache object containing all extracted
+                activations organized by activation type and layer. The cache includes:
+                - Activation tensors keyed by component names (e.g., 'resid_out_0')
+                - Token position mappings indicating which positions were extracted
+                - Additional batch elements saved via batch_saver
+                - Metadata about the extraction process
+        
+        Example:
+            >>> # Basic usage: extract residual stream outputs
+            >>> dataloader = [
+            ...     {"input_ids": torch.tensor([[101, 1234, 1235, 102]]),
+            ...      "attention_mask": torch.tensor([[1, 1, 1, 1]])},
+            ...     # ... more batches
+            ... ]
+            >>> 
+            >>> config = ExtractionConfig(extract_resid_out=True, save_input_ids=True)
+            >>> cache = model.extract_cache(
+            ...     dataloader,
+            ...     target_token_positions=["last"],
+            ...     extraction_config=config
+            ... )
+            >>> print(cache.keys())  # ['resid_out_0', 'resid_out_1', ..., 'input_ids']
+            
+            >>> # Advanced usage: extract attention patterns with interventions
+            >>> config = ExtractionConfig(
+            ...     extract_attn_pattern=True,
+            ...     extract_resid_out=True,
+            ...     attn_heads=[{"layer": 0, "head": 5}]
+            ... )
+            >>> interventions = [some_intervention_object]
+            >>> cache = model.extract_cache(
+            ...     dataloader,
+            ...     target_token_positions=["last", (5, 10)],
+            ...     extraction_config=config,
+            ...     interventions=interventions,
+            ...     batch_saver=lambda x: {"labels": x.get("labels", None)}
+            ... )
+        
+        Note:
+            - Large datasets may require careful memory management via move_to_cpu_after_forward
+            - The extraction_config must have is_not_empty() == True to extract anything
+            - Token position specifications are flexible and support various analysis needs
+            - Interventions enable causal analysis but may slow down extraction
+        
+        See Also:
+            - ExtractionConfig: For configuring which activations to extract
+            - TokenIndex.get_token_index: For token position specification details
+            - ActivationCache: For working with the returned activation data
         """
 
         logger.info("HookedModel: Extracting cache")
-
-        # get the function to save in the cache the additional element from the batch sime
-
-        logger.info("HookedModel: Forward pass started")
         all_cache = ActivationCache()  # a list of dictoionaries, each dictionary contains the activations of the model for a batch (so a dict of tensors)
         attn_pattern = (
             ActivationCache()

@@ -1,3 +1,45 @@
+"""
+Activation cache management for storing and manipulating model activations.
+
+This module provides the ActivationCache class and associated utilities for storing,
+organizing, and manipulating activations extracted from transformer models during
+interpretability analysis. The cache system is designed to handle large-scale
+activation data efficiently while providing flexible access patterns.
+
+Key Features:
+    - Hierarchical storage of activations by layer and component type
+    - Automatic aggregation strategies for combining activations across batches
+    - Memory-efficient handling of large activation datasets
+    - Support for different data types and tensor shapes
+    - Token position mapping for precise activation indexing
+    - Lazy loading and CPU/GPU memory management
+
+Classes:
+    - ActivationCache: Main cache class for storing and accessing activations
+    - Various aggregation functions for different combination strategies
+
+The module supports different aggregation strategies for combining activations:
+    - just_old: Always use new values (replacement strategy)
+    - just_me: Accumulate values in lists
+    - sublist: Flatten and extend lists of activations
+    - aggregate_last_layernorm: Special handling for layer normalization outputs
+
+Activation Storage Format:
+    The cache stores activations as tensors with standardized naming conventions:
+    - "resid_out_0", "resid_out_1", ...: Residual stream outputs by layer
+    - "attn_pattern_0_5": Attention patterns for layer 0, head 5
+    - "mlp_out_2": MLP outputs for layer 2
+    - "input_ids": Original input token IDs
+    - "mapping_index": Token position mappings
+
+Example Usage:
+    >>> cache = ActivationCache()
+    >>> cache["resid_out_0"] = torch.randn(1, 10, 768)
+    >>> cache["mapping_index"] = {"last": [9]}
+    >>> print(cache.keys())  # Shows available activations
+    >>> resid_activations = cache["resid_out_0"]  # Access specific activations
+"""
+
 import re
 import torch
 import contextlib
@@ -103,9 +145,72 @@ class ValueWithInfo:
 
 class ActivationCache:
     """
-    A dictionary-like cache for storing and aggregating model activation values.
-    Supports custom aggregation strategies registered for keys (by prefix match)
-    and falls back to a default aggregation that can dynamically switch types if needed.
+    A specialized dictionary-like container for storing and aggregating model activations.
+    
+    This class provides a flexible caching system specifically designed for handling
+    activation data from transformer models during interpretability analysis. It supports
+    automatic aggregation of activations across multiple forward passes, custom
+    aggregation strategies for different data types, and validation of activation keys.
+    
+    The cache system is built around the concept of registered aggregation strategies
+    that define how new activations should be combined with existing ones when the
+    same key is encountered multiple times (e.g., across different batches).
+    
+    Key Features:
+        - Dictionary-like interface for easy access to activations
+        - Automatic validation of activation keys using regex patterns
+        - Customizable aggregation strategies for different activation types
+        - Support for deferred caching to manage memory usage
+        - Built-in strategies for common activation patterns
+        
+    Supported Activation Types:
+        - Residual stream activations: "resid_out_N", "resid_in_N", "resid_mid_N"
+        - Attention activations: "attn_in_N", "attn_out_N"
+        - Attention patterns: "avg_attn_pattern_L{layer}H{head}", "pattern_L{layer}H{head}"
+        - MLP activations: "mlp_out_N"
+        - Special data: "input_ids", "mapping_index", "last_layernorm", "token_dict"
+        - Value vectors: "values_N"
+        
+    Aggregation Strategies:
+        The cache supports different strategies for combining multiple values:
+        - Default: Automatic type switching based on tensor compatibility
+        - just_old: Always replace with new values
+        - just_me: Accumulate values in lists
+        - sublist: Flatten and extend activation lists
+        - aggregate_last_layernorm: Special concatenation for layer norm outputs
+    
+    Attributes:
+        cache (dict): Internal storage for activation data
+        valid_keys (tuple): Compiled regex patterns for validating activation keys
+        aggregation_strategies (dict): Registered aggregation functions by key prefix
+        deferred_cache (bool): Whether to defer memory-intensive operations
+    
+    Example:
+        >>> cache = ActivationCache()
+        >>> 
+        >>> # Store activations
+        >>> cache["resid_out_0"] = torch.randn(1, 10, 768)
+        >>> cache["mapping_index"] = {"last": [9]}
+        >>> 
+        >>> # Access activations
+        >>> residual_activations = cache["resid_out_0"]
+        >>> token_positions = cache["mapping_index"]
+        >>> 
+        >>> # Register custom aggregation
+        >>> cache.register_aggregation("custom_key", lambda old, new: new)
+        >>> 
+        >>> # Check available activations
+        >>> print(list(cache.keys()))
+        >>> print(f"Cache contains {len(cache)} items")
+        
+        >>> # Aggregate across batches
+        >>> cache["resid_out_0"] = torch.randn(1, 10, 768)  # First batch
+        >>> cache["resid_out_0"] = torch.randn(1, 10, 768)  # Second batch (aggregated)
+    
+    Note:
+        The cache automatically validates activation keys against predefined patterns
+        to ensure data consistency. Invalid keys will raise warnings or errors
+        depending on the validation mode.
     """
 
     def __init__(self):
