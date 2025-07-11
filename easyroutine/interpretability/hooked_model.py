@@ -64,14 +64,63 @@ yaml_config = load_config()
 @dataclass
 class HookedModelConfig:
     """
-    Configuration of the HookedModel
+    Configuration class for HookedModel initialization and behavior.
 
-    Arguments:
-        model_name (str): the name of the model to load
-        device_map (Literal["balanced", "cuda", "cpu", "auto"]): the device to use for the model
-        torch_dtype (torch.dtype): the dtype of the model
-        attn_implementation (Literal["eager", "flash_attention_2"]): the implementation of the attention
-        batch_size (int): the batch size of the model. FOR NOW, ONLY BATCH SIZE 1 IS SUPPORTED. USE AT YOUR OWN RISK
+    This dataclass contains all the configuration parameters needed to initialize
+    a HookedModel instance. It provides sensible defaults while allowing
+    customization of model loading parameters, device configuration, and
+    processing settings.
+
+    Attributes:
+        model_name (str): The identifier of the model to load. Can be:
+            - A Hugging Face model repository name (e.g., "gpt2", "mistral-7b")
+            - A local path to a model directory
+            - Any model supported by transformers library
+            
+        device_map (Literal["balanced", "cuda", "cpu", "auto"], optional): 
+            Device placement strategy for the model. Options:
+            - "balanced": Distribute model across available GPUs evenly
+            - "cuda": Place entire model on the first available GPU
+            - "cpu": Place model on CPU (slower but uses less GPU memory)
+            - "auto": Let transformers decide optimal placement
+            Defaults to "balanced".
+            
+        torch_dtype (torch.dtype, optional): The data type for model parameters.
+            Common options include torch.float16, torch.bfloat16, torch.float32.
+            bfloat16 provides good balance of speed and stability.
+            Defaults to torch.bfloat16.
+            
+        attn_implementation (Literal["eager", "custom_eager"], optional):
+            The attention mechanism implementation to use:
+            - "eager": Standard PyTorch attention implementation
+            - "custom_eager": Enhanced implementation with better hook support
+            The custom implementation is recommended for interpretability work
+            as it provides more comprehensive hook coverage.
+            Defaults to "custom_eager".
+            
+        batch_size (int, optional): The batch size for model inference.
+            Currently, only batch size 1 is fully supported and tested.
+            Using larger batch sizes may lead to unexpected behavior.
+            Defaults to 1.
+
+    Example:
+        >>> config = HookedModelConfig(
+        ...     model_name="gpt2",
+        ...     device_map="auto",
+        ...     torch_dtype=torch.float16
+        ... )
+        >>> model = HookedModel(config)
+        
+        >>> # Or use the convenience method
+        >>> model = HookedModel.from_pretrained(
+        ...     "gpt2", 
+        ...     device_map="cuda",
+        ...     torch_dtype=torch.bfloat16
+        ... )
+
+    Warning:
+        Batch sizes greater than 1 are experimental and may not work correctly
+        with all interpretability features. Use at your own risk.
     """
 
     model_name: str
@@ -86,30 +135,153 @@ class HookedModelConfig:
 @dataclass
 class ExtractionConfig:
     """
-    Configuration of the extraction of the activations of the model. It store what activations you want to extract from the model.
+    Configuration class for specifying which model activations to extract.
 
-    Arguments:
-        extract_resid_in (bool): if True, extract the input of the residual stream
-        extract_resid_mid (bool): if True, extract the output of the intermediate stream
-        extract_resid_out (bool): if True, extract the output of the residual stream
-        extract_resid_in_post_layernorm(bool): if True, extract the input of the residual stream after the layernorm
-        extract_attn_pattern (bool): if True, extract the attention pattern of the attn
-        extract_head_values_projected (bool): if True, extract the values vectors projected of the model
-        extract_head_keys_projected (bool): if True, extract the key vectors projected of the model
-        extract_head_queries_projected (bool): if True, extract the query vectors projected of the model
-        extract_head_keys (bool): if True, extract the keys of the attention
-        extract_head_values (bool): if True, extract the values of the attention
-        extract_head_queries (bool): if True, extract the queries of the attention
-        extract_head_out (bool): if True, extract the output of the heads [DEPRECATED]
-        extract_attn_out (bool): if True, extract the output of the attention of the attn_heads passed
-        extract_attn_in (bool): if True, extract the input of the attention of the attn_heads passed
-        extract_mlp_out (bool): if True, extract the output of the mlp of the attn
-        save_input_ids (bool): if True, save the input_ids in the cache
-        avg (bool): if True, extract the average of the activations over the target positions
-        avg_over_example (bool): if True, extract the average of the activations over the examples (it required a external cache to save the running avg)
-        attn_heads (Union[list[dict], Literal["all"]]): list of dictionaries with the layer and head to extract the attention pattern or 'all' to
-        attn_pattern_avg (Literal["mean", "sum", "baseline_ratio", "none"]): the type of average to perform over the attention pattern. See hook.py attention_pattern_head for more details
-        attn_pattern_row_positions (Optional[Union[List[int], List[Tuple], List[str], List[Union[int, Tuple, str]]]): the row positions of the attention pattern to extract. See hook.py attention_pattern_head for more details
+    This comprehensive configuration class allows fine-grained control over
+    what internal activations and computations should be extracted from the
+    model during inference. It supports extraction from various model components
+    including residual streams, attention mechanisms, MLP layers, and more.
+
+    The configuration follows a boolean flag pattern where each attribute
+    specifies whether to extract a particular type of activation. This allows
+    for flexible composition of extraction requirements based on research needs.
+
+    Residual Stream Activations:
+        extract_resid_in (bool): Extract activations flowing into residual connections.
+            These are the inputs to each transformer layer before processing.
+            Defaults to False.
+            
+        extract_resid_mid (bool): Extract intermediate activations within layers.
+            These represent computational states between attention and MLP processing.
+            Defaults to False.
+            
+        extract_resid_out (bool): Extract activations flowing out of residual connections.
+            These are the final outputs of each transformer layer.
+            Defaults to False.
+            
+        extract_resid_in_post_layernorm (bool): Extract residual inputs after layer
+            normalization. Useful for studying the effect of normalization.
+            Defaults to False.
+
+    Attention Mechanism Activations:
+        extract_attn_pattern (bool): Extract attention weight matrices showing
+            which tokens attend to which other tokens. Essential for attention
+            analysis and visualization. Defaults to False.
+            
+        extract_attn_out (bool): Extract attention layer outputs before residual
+            connection. Shows the contribution of attention to each position.
+            Defaults to False.
+            
+        extract_attn_in (bool): Extract attention layer inputs. Useful for
+            studying how different inputs affect attention computations.
+            Defaults to False.
+
+    Attention Head Components:
+        extract_head_values_projected (bool): Extract value vectors after
+            projection in multi-head attention. Shows what information each
+            head is passing forward. Defaults to False.
+            
+        extract_head_keys_projected (bool): Extract key vectors after projection.
+            Combined with queries, determines attention patterns.
+            Defaults to False.
+            
+        extract_head_queries_projected (bool): Extract query vectors after
+            projection. Used with keys to compute attention weights.
+            Defaults to False.
+            
+        extract_head_keys (bool): Extract raw key vectors before projection.
+            Lower-level view of attention computation. Defaults to False.
+            
+        extract_head_values (bool): Extract raw value vectors before projection.
+            Shows pre-projection value representations. Defaults to False.
+            
+        extract_head_queries (bool): Extract raw query vectors before projection.
+            Shows pre-projection query representations. Defaults to False.
+            
+        extract_head_out (bool): [DEPRECATED] Extract head outputs.
+            Use extract_attn_out instead. Defaults to False.
+
+    Other Layer Components:
+        extract_mlp_out (bool): Extract MLP (feed-forward) layer outputs.
+            Shows the contribution of position-wise processing. Defaults to False.
+            
+        extract_embed (bool): Extract embedding layer outputs. Shows initial
+            token representations before transformer processing. Defaults to False.
+            
+        extract_last_layernorm (bool): Extract final layer normalization outputs.
+            Shows normalized representations before final predictions.
+            Defaults to False.
+
+    Metadata and Processing Options:
+        save_input_ids (bool): Include input token IDs in the activation cache.
+            Useful for mapping activations back to specific tokens.
+            Defaults to False.
+            
+        save_logits (bool): Include model output logits in the cache.
+            Essential for studying model predictions. Defaults to True.
+            
+        keep_gradient (bool): Preserve gradient information in extracted
+            activations. Required for gradient-based analysis methods.
+            Defaults to False.
+
+    Aggregation Options:
+        avg (bool): Compute average activations over specified target positions.
+            Reduces memory usage when only summary statistics are needed.
+            Defaults to False.
+            
+        avg_over_example (bool): Compute running average over multiple examples.
+            Requires external cache management for accumulation. Defaults to False.
+
+    Attention Analysis Options:
+        attn_heads (Union[list[dict], Literal["all"]]): Specifies which attention
+            heads to extract patterns from. Can be:
+            - "all": Extract from all heads in all layers
+            - List of dicts: Specific heads, e.g., [{"layer": 0, "head": 5}]
+            Defaults to "all".
+            
+        attn_pattern_avg (Literal["mean", "sum", "baseline_ratio", "none"]):
+            How to aggregate attention patterns. Options:
+            - "mean": Average across specified dimensions
+            - "sum": Sum across specified dimensions
+            - "baseline_ratio": Ratio relative to baseline pattern
+            - "none": No aggregation, return full patterns
+            Defaults to "none".
+            
+        attn_pattern_row_positions (Optional[Union[List[int], List[Tuple], List[str], List[Union[int, Tuple, str]]]]):
+            Specific row positions in attention patterns to extract.
+            Can specify token positions, ranges, or special position names.
+            If None, extracts full attention patterns. Defaults to None.
+
+    Example:
+        >>> # Basic residual stream extraction
+        >>> config = ExtractionConfig(
+        ...     extract_resid_out=True,
+        ...     save_input_ids=True
+        ... )
+        
+        >>> # Comprehensive attention analysis
+        >>> config = ExtractionConfig(
+        ...     extract_attn_pattern=True,
+        ...     extract_head_values_projected=True,
+        ...     attn_heads=[{"layer": 0, "head": 0}, {"layer": 1, "head": 3}],
+        ...     attn_pattern_avg="mean"
+        ... )
+        
+        >>> # Full model analysis
+        >>> config = ExtractionConfig(
+        ...     extract_resid_in=True,
+        ...     extract_resid_out=True,
+        ...     extract_attn_pattern=True,
+        ...     extract_mlp_out=True,
+        ...     save_logits=True,
+        ...     save_input_ids=True
+        ... )
+
+    Note:
+        Extracting many activation types can significantly increase memory usage
+        and computation time. Enable only the activations needed for your analysis.
+        The is_not_empty() method can be used to verify that at least one
+        extraction option is enabled.
     """
 
     extract_embed: bool = False
@@ -142,7 +314,34 @@ class ExtractionConfig:
 
     def is_not_empty(self):
         """
-        Return True if at least one of the attributes is True, False otherwise, i.e. if the model should extract something!
+        Check if any extraction options are enabled in this configuration.
+        
+        This method validates that at least one activation extraction flag is set
+        to True, ensuring that the configuration will actually extract some data
+        when used with a HookedModel. This is useful for validation before
+        running expensive extraction operations.
+        
+        Returns:
+            bool: True if at least one extraction option is enabled (any attribute
+                is True), False if all extraction options are disabled.
+        
+        Example:
+            >>> config = ExtractionConfig()  # All defaults (mostly False)
+            >>> config.is_not_empty()
+            True  # save_logits is True by default
+            
+            >>> config_empty = ExtractionConfig(save_logits=False)
+            >>> config_empty.is_not_empty()
+            False
+            
+            >>> config_active = ExtractionConfig(extract_resid_out=True)
+            >>> config_active.is_not_empty()
+            True
+        
+        Note:
+            This method checks all boolean extraction flags. It's recommended
+            to call this before expensive extraction operations to avoid
+            unnecessary computation when no activations would be extracted.
         """
         return any(
             [
@@ -172,8 +371,59 @@ class ExtractionConfig:
 
 class HookedModel:
     """
-    This class is a wrapper around the huggingface model that allows to extract the activations of the model. It is support
-    advanced mechanistic intepretability methods like ablation, patching, etc.
+    A comprehensive wrapper around Hugging Face transformer models for mechanistic interpretability.
+    
+    This class provides advanced functionality for extracting internal activations from transformer
+    models and performing mechanistic interpretability methods such as ablation studies, activation
+    patching, and intervention analysis. It supports both language models and vision-language models
+    with automatic module detection and custom attention implementations.
+    
+    The HookedModel class serves as the primary interface for interpretability research, offering:
+    - Automatic model loading and configuration
+    - Activation extraction from any model component
+    - Support for intervention and ablation studies
+    - Custom attention implementations for better hook support
+    - Batch processing capabilities
+    - Multi-device support
+    
+    Key Features:
+        - Extract activations from residual streams, attention layers, MLP layers
+        - Support for attention pattern analysis and head-specific extractions
+        - Intervention capabilities for causal analysis
+        - Automatic tokenizer and processor handling
+        - Support for vision-language models with image processing
+        - Custom eager attention implementation for comprehensive hook support
+    
+    Attributes:
+        config (HookedModelConfig): Configuration object containing model settings
+        hf_model: The underlying Hugging Face model
+        hf_language_model: The language model component (for vision-language models)
+        model_config: Internal model configuration for hook management
+        hf_tokenizer: The model's tokenizer
+        processor: Optional processor for vision-language models
+        text_tokenizer: Text tokenizer component
+        input_handler: Handles input preprocessing based on model type
+        module_wrapper_manager: Manages custom module wrappers
+        intervention_manager: Handles intervention operations
+        
+    Example:
+        >>> # Basic model loading
+        >>> model = HookedModel.from_pretrained("gpt2")
+        >>> 
+        >>> # Extract activations
+        >>> cache = model.extract_cache(
+        ...     inputs,
+        ...     target_token_positions=["last"],
+        ...     extraction_config=ExtractionConfig(extract_resid_out=True)
+        ... )
+        >>> 
+        >>> # Perform interventions
+        >>> result = model.run_with_interventions(inputs, interventions)
+    
+    Note:
+        The model uses custom eager attention implementation by default to ensure
+        comprehensive hook support. This can be disabled by setting 
+        attn_implementation="eager" in the configuration.
     """
 
     def __init__(self, config: HookedModelConfig, log_file_path: Optional[str] = None):
