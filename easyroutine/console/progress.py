@@ -258,6 +258,7 @@ def get_progress_bar(
 def progress(
     iterable,
     description: str = "",
+    desc: Optional[str] = None,
     total: Optional[int] = None,
     disable: bool = False,
     force_batch_mode: bool = False,
@@ -288,6 +289,8 @@ def progress(
             total = len(iterable)
         except (TypeError, AttributeError):
             pass
+    if desc is not None:
+        description = desc
 
     with get_progress_bar(
         disable=disable,
