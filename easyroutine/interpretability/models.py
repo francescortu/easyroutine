@@ -497,11 +497,17 @@ class InputHandler:
             "facebook/chameleon-7b",
             "facebook/chameleon-30b",
         ]:
-            input_dict = {
-                "input_ids": batch_dict["input_ids"],
-                "attention_mask": batch_dict["attention_mask"],
-                "pixel_values": batch_dict["pixel_values"].to(torch_dtype),
-            }
+            if not "pixel_values" in batch_dict:
+                input_dict = {
+                    "input_ids": batch_dict["input_ids"],
+                    "attention_mask": batch_dict["attention_mask"],
+                }
+            else:
+                input_dict = {
+                    "input_ids": batch_dict["input_ids"],
+                    "attention_mask": batch_dict["attention_mask"],
+                    "pixel_values": batch_dict["pixel_values"].to(torch_dtype),
+                }
         elif self.model_name in ["mistral-community/pixtral-12b"]:
             if "pixel_values" not in batch_dict:
                 input_dict = {

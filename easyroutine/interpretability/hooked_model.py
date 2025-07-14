@@ -13,7 +13,7 @@ from easyroutine.interpretability.interventions import Intervention, Interventio
 from easyroutine.interpretability.utils import get_attribute_by_name
 from easyroutine.interpretability.module_wrappers.manager import ModuleWrapperManager
 from easyroutine.logger import logger
-from tqdm import tqdm
+from easyroutine.console import progress
 from dataclasses import dataclass
 # from easyroutine.interpretability.ablation import AblationManager
 
@@ -45,7 +45,7 @@ import pandas as pd
 
 import importlib.resources
 import yaml
-from easyroutine.console import get_progress_bar
+
 
 
 def load_config() -> dict:
@@ -1199,8 +1199,9 @@ class HookedModel:
         """
         # Initialize cache for logits
         # raise NotImplementedError("This method is not working. It needs to be fixed")
+        cache = ActivationCache()
         hook_handlers = None
-        if target_token_positions is not None:
+        if target_token_positions is not None or self.additional_interventions is not None:
             string_tokens = self.to_string_tokens(
                 self.input_handler.get_input_ids(inputs).squeeze()
             )
@@ -1213,7 +1214,7 @@ class HookedModel:
                 inputs=inputs,
                 token_dict=token_dict,
                 token_indexes=token_indexes,
-                cache=ActivationCache(),
+                cache=cache,
                 **kwargs,
             )
             hook_handlers = self.set_hooks(hooks)
@@ -1223,12 +1224,15 @@ class HookedModel:
         output = self.hf_model.generate(
             **inputs,  # type: ignore
             generation_config=generation_config,
-            output_scores=False,  # type: ignore
+            # output_scores=False,  # type: ignore
         )
         if hook_handlers:
             self.remove_hooks(hook_handlers)
         if return_text:
             return self.hf_tokenizer.decode(output[0], skip_special_tokens=True)  # type: ignore
+        if not cache.is_empty():
+            # if the cache is not empty, we will return the cache
+            output = {"generation_output": output, "cache": cache}
         return output  # type: ignore
 
     def extract_cache(
@@ -1289,59 +1293,54 @@ class HookedModel:
         # example_dict = {}
         n_batches = 0  # Initialize batch counter
 
-        with get_progress_bar() as progress:
-            # task1 = progress.add_task(
-            #     description="[cyan]Extracting cache:", total=len(dataloader)
-            # )
-            for batch in progress.track(
-                dataloader, description="Extracting cache", total=len(dataloader)
-            ):
-                # log_memory_usage("Extract cache - Before batch")
-                # tokens, others = batch
-                # inputs = {k: v.to(self.first_device) for k, v in tokens.items()}
+        for batch in progress(dataloader, desc="Extracting cache", total=len(dataloader)):
 
-                # get input_ids, attention_mask, and if available, pixel_values from batch (that is a dictionary)
-                # then move them to the first device
+            # log_memory_usage("Extract cache - Before batch")
+            # tokens, others = batch
+            # inputs = {k: v.to(self.first_device) for k, v in tokens.items()}
 
-                inputs = self.input_handler.prepare_inputs(
-                    batch, self.first_device
-                )  # require_grads is False, gradients handled by hook if needed
-                others = {k: v for k, v in batch.items() if k not in inputs}
+            # get input_ids, attention_mask, and if available, pixel_values from batch (that is a dictionary)
+            # then move them to the first device
 
-                cache = self.forward(
-                    inputs,
-                    target_token_positions=target_token_positions,
-                    pivot_positions=batch.get("pivot_positions", None),
-                    external_cache=attn_pattern,
-                    batch_idx=n_batches,
-                    extraction_config=extraction_config,
-                    interventions=interventions,
-                    vocabulary_index=batch.get("vocabulary_index", None),
-                    **kwargs,
-                )
+            inputs = self.input_handler.prepare_inputs(
+                batch, self.first_device
+            )  # require_grads is False, gradients handled by hook if needed
+            others = {k: v for k, v in batch.items() if k not in inputs}
 
-                # Compute input gradients if requested
+            cache = self.forward(
+                inputs,
+                target_token_positions=target_token_positions,
+                pivot_positions=batch.get("pivot_positions", None),
+                external_cache=attn_pattern,
+                batch_idx=n_batches,
+                extraction_config=extraction_config,
+                interventions=interventions,
+                vocabulary_index=batch.get("vocabulary_index", None),
+                **kwargs,
+            )
 
-                # possible memory leak from here -___--------------->
-                additional_dict = batch_saver(
-                    others
-                )  # TODO: Maybe keep the batch_saver in a different cache
-                if additional_dict is not None:
-                    # cache = {**cache, **additional_dict}if a
-                    cache.update(additional_dict)
+            # Compute input gradients if requested
 
-                if move_to_cpu_after_forward:
-                    cache.cpu()
+            # possible memory leak from here -___--------------->
+            additional_dict = batch_saver(
+                others
+            )  # TODO: Maybe keep the batch_saver in a different cache
+            if additional_dict is not None:
+                # cache = {**cache, **additional_dict}if a
+                cache.update(additional_dict)
 
-                n_batches += 1  # Increment batch counter# Process and remove "pattern_" keys from cache
-                all_cache.cat(cache)
+            if move_to_cpu_after_forward:
+                cache.cpu()
 
-                del cache
+            n_batches += 1  # Increment batch counter# Process and remove "pattern_" keys from cache
+            all_cache.cat(cache)
 
-                # Use the new cleanup_tensors method from InputHandler to free memory
-                self.input_handler.cleanup_tensors(inputs, others)
+            del cache
 
-                torch.cuda.empty_cache()
+            # Use the new cleanup_tensors method from InputHandler to free memory
+            self.input_handler.cleanup_tensors(inputs, others)
+
+            torch.cuda.empty_cache()
 
         logger.debug("Forward pass finished - started to aggregate different batch")
         all_cache.update(attn_pattern)
@@ -1444,7 +1443,7 @@ class HookedModel:
         # get a random number in the range of the dataset to save a random batch
         all_cache = ActivationCache()
         # for each batch in the dataset
-        for index, (base_batch, target_batch) in tqdm(
+        for index, (base_batch, target_batch) in progress(
             enumerate(zip(base_dataloader, target_dataloader)),
             desc="Computing patching on the dataset:",
             total=len(base_dataloader),
