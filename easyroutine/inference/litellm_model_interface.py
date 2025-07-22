@@ -2,6 +2,7 @@ from easyroutine.inference.base_model_interface import (
     BaseInferenceModel,
     BaseInferenceModelConfig,
 )
+
 from easyroutine.inference.vllm_model_interface import VLLMServer
 from vllm import LLM, SamplingParams
 from typing import Union, List, Literal

@@ -4,7 +4,7 @@ from easyroutine.inference.base_model_interface import (
 )
 from easyroutine.console import progress
 from vllm import LLM, SamplingParams
-from typing import Union, List, Literal
+from typing import Union, List, Literal, Optional
 from vllm.entrypoints.chat_utils import ChatCompletionMessageParam
 from dataclasses import dataclass
 import subprocess
@@ -14,8 +14,9 @@ import time
 @dataclass
 class VLLMInferenceModelConfig(BaseInferenceModelConfig):
     """just a placeholder for now, as we don't have any specific config for VLLM."""
-
-
+    gpu_memory_utilization: float = 0.8
+    max_model_len: Optional[int] = None
+    
 class VLLMInferenceModel(BaseInferenceModel):
     """
     VLLM inference model interface.
@@ -28,6 +29,9 @@ class VLLMInferenceModel(BaseInferenceModel):
             model=config.model_name,
             tensor_parallel_size=config.n_gpus,
             dtype=config.dtype,
+            gpu_memory_utilization=config.gpu_memory_utilization,
+            # max_seq_len_to_capture=1000,
+            max_model_len=config.max_model_len,
         )
 
     def convert_chat_messages_to_custom_format(
