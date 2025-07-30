@@ -50,3 +50,5 @@ For publish the package push a commit with the flag:
   - `[major]`: 2.x.x -> 3.0.0
 
 Example commit: `fix multiple bus [patch]`
+
+-
