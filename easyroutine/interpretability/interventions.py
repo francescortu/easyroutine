@@ -9,6 +9,7 @@ from easyroutine.interpretability.hooks import (
     intervention_attn_mat_hook,
     intervention_heads_hook,
     intervention_resid_hook,
+    intervention_query_key_value_hook
 )
 from functools import partial
 from dataclasses import dataclass
@@ -61,6 +62,7 @@ class InterventionConfig(BaseModel):
     hook_name: str
     hook_func: Any = None
     apply_intervention_func: Any = None
+    head_dim: Optional[int] = None
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -232,6 +234,38 @@ def intervention_resid_full(hook_name, intervention, token_dict):
         ),
     }
 
+def intervention_query_key_value(hook_name, intervention, token_dict):
+    """
+    Pre-Hook function to compute the values to be intervened in the attention matrix.
+    """
+    # compute the pre-hooks information and return the hook_func
+    target_positions = []
+    for token in intervention["token_positions"]:
+        if isinstance(token, str) and token in token_dict:
+            # If the token is a string, get the positions from the token_dict
+            target_positions.extend(token_dict[token])
+        elif isinstance(token, int):
+            # If the token is an int, add it directly to the target positions
+            target_positions.append(token)
+
+    # get the integer layer number from teh activation string resid_out_L\d+ or resid_in_L\d+ or resid_mid_L\d+
+    layer = int(
+        re.search(r"(\d+)", intervention.activation).group(1)
+    )
+    head = int(
+        re.search(r"H(\d+)", intervention.activation).group(1)
+    )
+    
+    return {
+        "component": hook_name.format(layer),
+        "intervention": partial(
+            intervention_query_key_value_hook,
+            token_indexes=target_positions,
+            head=head,
+            head_dim=intervention["head_dim"],
+            patching_values=intervention["patching_values"],
+        ),
+    }
 
 class InterventionManager:
     """
@@ -388,25 +422,49 @@ class InterventionManager:
                 )
             },
             # Head component interventions
-            re.compile(r"values_L\d+H\d+"): {
+            re.compile(r"values_L\d"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.head_value_hook_name,
                     hook_func=intervention_resid_hook,
                     apply_intervention_func=intervention_resid_full,
                 )
             },
-            re.compile(r"keys_L\d+H\d+"): {
+            re.compile(r"keys_L\d"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.head_key_hook_name,
                     hook_func=intervention_resid_hook,
                     apply_intervention_func=intervention_resid_full,
                 )
             },
-            re.compile(r"queries_L\d+H\d+"): {
+            re.compile(r"queries_L\d"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.head_query_hook_name,
                     hook_func=intervention_resid_hook,
                     apply_intervention_func=intervention_resid_full,
+                )
+            },
+            re.compile(r"values_L\dH\d"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_value_hook_name,
+                    hook_func=intervention_query_key_value,
+                    apply_intervention_func=intervention_resid_full,
+                    head_dim=self.model_config.head_dim
+                )
+            },
+            re.compile(r"keys_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_key_hook_name,
+                    hook_func=intervention_query_key_value,
+                    apply_intervention_func=intervention_resid_full,
+                    head_dim=self.model_config.head_dim
+                )
+            },
+            re.compile(r"queries_L\d+H\d+"): {
+                "full": InterventionConfig(
+                    hook_name=self.model_config.head_query_hook_name,
+                    hook_func=intervention_query_key_value,
+                    apply_intervention_func=intervention_resid_full,
+                    head_dim=self.model_config.head_dim
                 )
             },
             # Projected vectors interventions

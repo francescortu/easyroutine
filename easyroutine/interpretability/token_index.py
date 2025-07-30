@@ -388,10 +388,12 @@ class TokenIndex:
                     token_indexes["all"]
                 ):
                     raise ValueError(f"Token {token} is out of range")
-                elif start > end:
+                elif start > end and end > 0:
                     raise ValueError(
                         f"Token {token} is invalid. The start index must be less than the end index"
                     )
+                if start > 0 and end < 0:
+                    end = len(token_indexes["all"]) - end
                 numeric_tokens[token] = list(range(start, end))
             elif token.startswith("random-inputs-partition-"):
                 group, n = self.parse_random_group_token(token)
@@ -399,9 +401,14 @@ class TokenIndex:
                     position_dict[f"inputs-partition-{group}"], int(n)
                 )
             elif token.startswith("random-image"):
+                
                 n = token.split("-")[-1]
+                if n.isdigit():
+                    n = int(n)
+                else:
+                    n = None
                 random_position_dict[token] = random.sample(
-                    token_indexes["image"], int(n) if n else 1
+                    token_indexes["image"], n if n else 1
                 )
 
         token_dict = self.get_token_dict(token_indexes, random_position_dict)

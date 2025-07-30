@@ -123,6 +123,7 @@ class ExtractionConfig:
     extract_head_queries_projected: bool = False
     extract_head_keys: bool = False
     extract_head_values: bool = False
+    extract_values: bool = False
     extract_head_queries: bool = False
     extract_head_out: bool = False
     extract_attn_out: bool = False
@@ -600,6 +601,8 @@ class HookedModel:
                 }
                 for i, head in zip(layer_indexes, head_indexes)
             ]
+            
+        
 
         if extraction_config.extract_head_values:
             hooks += [
@@ -620,6 +623,21 @@ class HookedModel:
                 for i, head in zip(layer_indexes, head_indexes)
             ]
 
+        if extraction_config.extract_values:
+            hooks += [
+                {
+                    "component": self.model_config.head_value_hook_name.format(i),
+                    "intervention": partial(
+                        save_resid_hook,
+                        cache=cache,
+                        cache_key=f"layer_values_{i}",
+                        token_indexes=token_indexes,
+                        avg=extraction_config.avg,
+                    ) 
+                } 
+                for i in range(0, self.model_config.num_hidden_layers)
+            ]
+                        
         if extraction_config.extract_head_keys:
             hooks += [
                 {

@@ -837,6 +837,28 @@ class TestHookedLlavaModel(BaseHookedModelTestCase):
         )  # type: ignore
 
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+        
+class TestHookedLlavaOneVisionModel(BaseHookedModelTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="llava-hf/llava-onevision-qwen2-7b-ov-hf",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
 
 class TestHookedGemma3Model(BaseHookedModelTestCase):

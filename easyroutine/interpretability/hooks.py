@@ -196,6 +196,9 @@ def intervention_resid_hook(
         logger.debug(
             "Patching values provided, applying patching values to the residual stream"
         )
+        assert b[..., list(token_indexes), :].shape == patching_values.shape, (
+            f"Shape mismatch: activations is {b[..., list(token_indexes), :].shape} but patching values is {patching_values.shape}"
+        )
         b[..., list(token_indexes), :] = patching_values
     return restore_same_args_kwargs_output(b, args, kwargs, output)
 
@@ -260,6 +263,37 @@ def query_key_value_hook(
         key = f"{cache_key}L{layer}H{head_idx}"
         cache.add_with_info(key, processed_tokens, info_string)
 
+def intervention_query_key_value_hook(
+     module,
+    args,
+    kwargs,
+    output,
+    token_indexes,
+    head,
+    head_dim,
+    patching_values: Optional[Union[str, torch.Tensor]] = None):
+    r"""
+    Hook function to intervene on the query, key and value vectors. It first unpack the vectors from the output of the module and then apply the intervention and then repack the vectors.
+    """
+    b = process_args_kwargs_output(args, kwargs, output)
+    input_shape = b.shape[:-1]
+    hidden_shape = (*input_shape, -1, head_dim)
+    b = b.view(hidden_shape).transpose(1, 2)
+    
+    tensor_head = b.data.detach().clone()[:, head, ...] 
+    # Apply the intervention
+    if patching_values is None or patching_values == "ablation":
+        logger.debug("No patching values provided, ablation will be performed on the query, key and value vectors")
+        tensor_head[..., token_indexes, :] = 0
+    else:
+        logger.debug("Patching values provided, applying patching values to the query, key and value vectors")
+        tensor_head[..., list(token_indexes), :] = patching_values
+        
+    # Repack the vectors
+    b = tensor_head.transpose(1, 2).reshape(input_shape + (-1,))
+    # Restore the args and kwargs
+    b = restore_same_args_kwargs_output(b, args, kwargs, output)
+    return b
 
 def avg_hook(
     module,
