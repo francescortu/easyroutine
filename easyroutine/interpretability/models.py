@@ -217,6 +217,7 @@ class ModelFactory:
                     embed_tokens="language_model.model.layers[0].input",
                     unembed_matrix="language_model.lm_head.weight",
                     last_layernorm="language_model.model.norm",
+                    attn_matrix_pre_softmax_hook_name="language_model.model.layers[{}].self_attn.attention_matrix_pre_softmax_hook.output",
                     num_hidden_layers=model.language_model.config.num_hidden_layers,
                     num_attention_heads=model.language_model.config.num_attention_heads,
                     hidden_size=model.language_model.config.hidden_size,
