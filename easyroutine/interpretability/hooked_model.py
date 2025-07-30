@@ -597,6 +597,7 @@ class HookedModel:
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        num_attention_heads=self.model_config.num_attention_heads,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -618,6 +619,7 @@ class HookedModel:
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        num_attention_heads=self.model_config.num_attention_heads,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -652,6 +654,7 @@ class HookedModel:
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        num_attention_heads=self.model_config.num_attention_heads,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)

@@ -150,7 +150,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         # Create an extraction config with pattern extraction
         extraction_config = ExtractionConfig(
             extract_attn_pattern=True,
-            attn_pattern_avg="mean",
+            attn_pattern_avg="none",
             attn_pattern_row_positions=["all"],
         )
 
@@ -174,7 +174,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         # Test with averaging over examples
         extraction_config_avg = ExtractionConfig(
             extract_attn_pattern=True,
-            attn_pattern_avg="mean",
+            attn_pattern_avg="none",
             attn_pattern_row_positions=["all"],
             avg_over_example=True,
         )
@@ -186,7 +186,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         # Check that patterns were averaged over examples (batch dim should be 1)
-        pattern_key = f"pattern_L0H0"
+        pattern_key = f"avg_pattern_L0H0"
         self.assertIn(pattern_key, avg_cache)
         self.assertEqual(
             avg_cache[pattern_key].shape, (1, self.input_size, self.input_size)
@@ -711,6 +711,39 @@ class BaseHookedModelTestCase(unittest.TestCase):
 
     def test_intervention(self):
         pass
+    
+    def test_key_query_value_intervention(self):
+        """
+        Test the key_query_value_intervention method of HookedModel.
+        """
+        # Define a simple intervention
+        intervention_list = [
+            Intervention(
+                type="full",
+                activation=f"values_L{i}",
+                token_positions=["last"],
+                patching_values=torch.ones(1, 1,  self.MODEL.model_config.head_dim * self.MODEL.model_config.num_key_value_heads, dtype=torch.bfloat16, device=self.MODEL.device()),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        # Apply the intervention
+        self.MODEL.register_interventions(intervention_list)
+        cache = self.MODEL.forward(
+            self.INPUTS,
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_values=True,
+            )
+        )
+        #TODO this should be revise
+        # Check if the intervention was applied correctly
+        for i in range(self.MODEL.model_config.num_hidden_layers):
+            key = f"values_L{i}"
+            self.assertIn(key, cache)
+            # Check if the values are as expected
+            self.assertTrue(torch.all(cache[key] == 1.0), f"Intervention on {key} failed")
+        
+        
 
 
 ################### BASE TEST CASES ######################

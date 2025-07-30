@@ -214,6 +214,7 @@ def query_key_value_hook(
     layer,
     head_dim,
     num_key_value_groups: int,
+    num_attention_heads: int,
     head: Union[str, int] = "all",
     avg: bool = False,
 ):
@@ -223,8 +224,16 @@ def query_key_value_hook(
     b = process_args_kwargs_output(args, kwargs, output)
     input_shape = b.shape[:-1]
     hidden_shape = (*input_shape, -1, head_dim)
+    
+    
+    
     b = b.view(hidden_shape).transpose(1, 2)
     # cache[cache_key] = b.data.detach().clone()[..., token_index, :]
+    if num_key_value_groups > 1 and b.size(1) != num_attention_heads: # we are in kv group attention
+        # we need to repeat the key and value states
+        b = repeat_kv(b, num_attention_heads // b.size(1))
+    
+    # check if we are using kv group attention
 
     info_string = "Shape: batch seq_len d_head"
 
@@ -271,6 +280,8 @@ def intervention_query_key_value_hook(
     token_indexes,
     head,
     head_dim,
+    num_key_value_groups: int,
+    num_attention_heads: int,
     patching_values: Optional[Union[str, torch.Tensor]] = None):
     r"""
     Hook function to intervene on the query, key and value vectors. It first unpack the vectors from the output of the module and then apply the intervention and then repack the vectors.
@@ -279,6 +290,10 @@ def intervention_query_key_value_hook(
     input_shape = b.shape[:-1]
     hidden_shape = (*input_shape, -1, head_dim)
     b = b.view(hidden_shape).transpose(1, 2)
+    
+    # if num_key_value_groups > 1 and b.size(1) != num_attention_heads:  # we are in kv group attention
+    #     b = repeat_kv(b, num_attention_heads // b.size(1))
+    # check if we are using kv group attention
     
     tensor_head = b.data.detach().clone()[:, head, ...] 
     # Apply the intervention

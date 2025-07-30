@@ -15,6 +15,9 @@ from easyroutine.interpretability.module_wrappers.T5_attention import T5Attentio
 from easyroutine.interpretability.module_wrappers.gemma3_attention import (
     Gemma3AttentionWrapper,
 )
+from easyroutine.interpretability.module_wrappers.qwen2_attention import (
+    Qwen2AttentionWrapper,
+)
 from easyroutine.logger import logger
 
 from easyroutine.interpretability.utils import parse_module_path, find_all_modules
@@ -31,6 +34,8 @@ class AttentionWrapperFactory:
         T5AttentionWrapper.original_name(): T5AttentionWrapper,
         MistralAttentionWrapper.original_name(): MistralAttentionWrapper,
         Gemma3AttentionWrapper.original_name(): Gemma3AttentionWrapper,
+        Qwen2AttentionWrapper.original_name(): Qwen2AttentionWrapper,
+        
     }
 
     # MODEL_NAME_TO_WRAPPER = {
@@ -53,6 +58,7 @@ class AttentionWrapperFactory:
             Type[T5AttentionWrapper],
             Type[MistralAttentionWrapper],
             Type[Gemma3AttentionWrapper],
+            Type[Qwen2AttentionWrapper]
         ],
     ]:
         """
