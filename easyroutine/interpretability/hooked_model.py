@@ -47,7 +47,6 @@ import importlib.resources
 import yaml
 
 
-
 def load_config() -> dict:
     with importlib.resources.open_text(
         "easyroutine.interpretability.config", "config.yaml"
@@ -100,6 +99,10 @@ class ExtractionConfig:
         extract_head_keys (bool): if True, extract the keys of the attention
         extract_head_values (bool): if True, extract the values of the attention
         extract_head_queries (bool): if True, extract the queries of the attention
+        extract_values (bool): if True, extract the values. This do not reshape the values to the attention heads as extract_head_values does
+        extract_keys (bool): if True, extract the keys. This do not reshape the keys to the attention heads as extract_head_keys does
+        extract_queries (bool): if True, extract the queries. This do not reshape the queries to the attention heads as extract_head_queries does
+        extract_last_layernorm (bool): if True, extract the last layernorm of the model
         extract_head_out (bool): if True, extract the output of the heads [DEPRECATED]
         extract_attn_out (bool): if True, extract the output of the attention of the attn_heads passed
         extract_attn_in (bool): if True, extract the input of the attention of the attn_heads passed
@@ -124,6 +127,9 @@ class ExtractionConfig:
     extract_head_keys: bool = False
     extract_head_values: bool = False
     extract_head_queries: bool = False
+    extract_values: bool = False
+    extract_keys: bool = False
+    extract_queries: bool = False
     extract_head_out: bool = False
     extract_attn_out: bool = False
     extract_attn_in: bool = False
@@ -142,7 +148,7 @@ class ExtractionConfig:
 
     def is_not_empty(self):
         """
-        Return True if at least one of the attributes is True, False otherwise, i.e. if the model should extract something!
+        Return True if at least one extraction option is enabled in the config, False otherwise.
         """
         return any(
             [
@@ -167,13 +173,15 @@ class ExtractionConfig:
         )
 
     def to_dict(self):
+        """
+        Return the configuration as a dictionary.
+        """
         return self.__dict__
 
 
 class HookedModel:
     """
-    This class is a wrapper around the huggingface model that allows to extract the activations of the model. It is support
-    advanced mechanistic intepretability methods like ablation, patching, etc.
+    Wrapper around a HuggingFace model for extracting activations and supporting mechanistic interpretability methods.
     """
 
     def __init__(self, config: HookedModelConfig, log_file_path: Optional[str] = None):
@@ -286,27 +294,30 @@ class HookedModel:
 
     def set_custom_modules(self):
         """
-        Apply the wrap of the custom modules. for now just the attention module
+        Substitute custom modules (e.g., attention) into the model for advanced interpretability.
         """
         logger.info("HookedModel: Setting custom modules.")
         self.module_wrapper_manager.substitute_attention_module(self.hf_model)
 
     def restore_original_modules(self):
         """
-        Restore the original modules of the model unloading the custom modules.
+        Restore the original modules of the model, removing any custom substitutions.
         """
         logger.info("HookedModel: Restoring original modules.")
         self.module_wrapper_manager.restore_original_attention_module(self.hf_model)
 
     def is_multimodal(self) -> bool:
         """
-        Get if the model is multimodal or not
+        Return True if the model supports multimodal inputs (e.g., images), False otherwise.
         """
         if self.processor is not None:
             return True
         return False
 
     def use_full_model(self):
+        """
+        Switch to the full model (including multimodal components if available).
+        """
         if self.processor is not None:
             logger.debug("HookedModel: Using full model capabilities")
             if self.base_model is not None:
@@ -319,6 +330,9 @@ class HookedModel:
             logger.debug("HookedModel: Using full text only model capabilities")
 
     def use_language_model_only(self):
+        """
+        Switch to using only the language model component (text-only mode).
+        """
         if self.hf_language_model is None:
             logger.warning(
                 "HookedModel: The model does not have a separate language model that can be used",
@@ -333,6 +347,9 @@ class HookedModel:
             logger.debug("HookedModel: Using only language model capabilities")
 
     def get_tokenizer(self):
+        """
+        Return the tokenizer associated with the model.
+        """
         return self.hf_tokenizer
 
     def get_text_tokenizer(self):
@@ -366,41 +383,42 @@ class HookedModel:
         return self.processor
 
     def get_lm_head(self):
+        """
+        Return the language modeling head (output projection layer) of the model.
+        """
         return get_attribute_by_name(self.hf_model, self.model_config.unembed_matrix)
 
     def get_last_layernorm(self):
+        """
+        Return the last layer normalization module of the model.
+        """
         return get_attribute_by_name(self.hf_model, self.model_config.last_layernorm)
 
     def get_image_placeholder(self) -> str:
+        """
+        Return the image placeholder string used by the tokenizer for multimodal models.
+        """
         return self.image_placeholder
 
     def eval(self):
-        r"""
-        Set the model in evaluation mode
+        """
+        Set the model to evaluation mode.
         """
         self.hf_model.eval()
 
     def device(self):
-        r"""
-        Return the device of the model. If the model is in multiple devices, it will return the first device
-
-        Args:
-            None
-
-        Returns:
-            device: the device of the model
+        """
+        Return the device (e.g., 'cuda', 'cpu') where the model is located.
         """
         return self.first_device
 
     def register_forward_hook(self, component: str, hook_function: Callable):
         r"""
-        Add a new hook to the model. The hook will be called in the forward pass of the model.
+        Register a forward hook on a model component.
 
         Args:
-            component (str): the component of the model where the hook will be added.
-            hook_function (Callable): the function that will be called in the forward pass of the model. The function must have the following signature:
-                def hook_function(module, input, output):
-                    pass
+            component (str): Name of the model component.
+            hook_function (Callable): Function to call during forward pass.
 
         Returns:
             None
@@ -447,10 +465,16 @@ class HookedModel:
         return string_tokens
 
     def register_interventions(self, interventions: List[Intervention]):
+        """
+        Register a list of interventions to be applied during forward passes.
+        """
         self.additional_interventions = interventions
         logger.debug(f"HookedModel: Registered {len(interventions)} interventions")
 
     def clean_interventions(self):
+        """
+        Remove all registered interventions.
+        """
         self.additional_interventions = []
         logger.debug(
             f"HookedModel: Removed {len(self.additional_interventions)} interventions"
@@ -502,6 +526,11 @@ class HookedModel:
         else:
             raise ValueError(
                 "attn_heads must be 'all' or a list of dictionaries as [{'layer': 0, 'head': 0}]"
+            )
+        # register the intervention hooks as first thing to do
+        if self.additional_interventions is not None:
+            hooks += self.intervention_manager.create_intervention_hooks(
+                interventions=self.additional_interventions, token_dict=token_dict
             )
 
         if extraction_config.extract_resid_out:
@@ -589,13 +618,14 @@ class HookedModel:
                     "intervention": partial(
                         query_key_value_hook,
                         cache=cache,
-                        cache_key="queries_",
+                        cache_key="head_queries_",
                         token_indexes=token_indexes,
                         head_dim=self.model_config.head_dim,
                         avg=extraction_config.avg,
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        num_attention_heads=self.model_config.num_attention_heads,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -608,13 +638,14 @@ class HookedModel:
                     "intervention": partial(
                         query_key_value_hook,
                         cache=cache,
-                        cache_key="values_",
+                        cache_key="head_values_",
                         token_indexes=token_indexes,
                         head_dim=self.model_config.head_dim,
                         avg=extraction_config.avg,
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        num_attention_heads=self.model_config.num_attention_heads,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
@@ -627,16 +658,62 @@ class HookedModel:
                     "intervention": partial(
                         query_key_value_hook,
                         cache=cache,
-                        cache_key="keys_",
+                        cache_key="head_keys_",
                         token_indexes=token_indexes,
                         head_dim=self.model_config.head_dim,
                         avg=extraction_config.avg,
                         layer=i,
                         head=head,
                         num_key_value_groups=self.model_config.num_key_value_groups,
+                        num_attention_heads=self.model_config.num_attention_heads,
                     ),
                 }
                 for i, head in zip(layer_indexes, head_indexes)
+            ]
+
+        if extraction_config.extract_values:
+            hooks += [
+                {
+                    "component": self.model_config.head_value_hook_name.format(i),
+                    "intervention": partial(
+                        save_resid_hook,
+                        cache=cache,
+                        cache_key=f"values_L{i}",
+                        token_indexes=token_indexes,
+                        avg=extraction_config.avg,
+                    ),
+                }
+                for i in range(0, self.model_config.num_hidden_layers)
+            ]
+
+        if extraction_config.extract_keys:
+            hooks += [
+                {
+                    "component": self.model_config.head_key_hook_name.format(i),
+                    "intervention": partial(
+                        save_resid_hook,
+                        cache=cache,
+                        cache_key=f"keys_L{i}",
+                        token_indexes=token_indexes,
+                        avg=extraction_config.avg,
+                    ),
+                }
+                for i in range(0, self.model_config.num_hidden_layers)
+            ]
+
+        if extraction_config.extract_queries:
+            hooks += [
+                {
+                    "component": self.model_config.head_query_hook_name.format(i),
+                    "intervention": partial(
+                        save_resid_hook,
+                        cache=cache,
+                        cache_key=f"queries_L{i}",
+                        token_indexes=token_indexes,
+                        avg=extraction_config.avg,
+                    ),
+                }
+                for i in range(0, self.model_config.num_hidden_layers)
             ]
 
         if extraction_config.extract_head_out:
@@ -771,10 +848,6 @@ class HookedModel:
         if interventions is not None:
             hooks += self.intervention_manager.create_intervention_hooks(
                 interventions=interventions, token_dict=token_dict
-            )
-        if self.additional_interventions is not None:
-            hooks += self.intervention_manager.create_intervention_hooks(
-                interventions=self.additional_interventions, token_dict=token_dict
             )
         if extraction_config.extract_head_values_projected:
             hooks += [
@@ -1167,7 +1240,7 @@ class HookedModel:
 
     def remove_hooks(self, hook_handlers):
         """
-        Remove all the hooks from the model
+        Remove all hooks from the model using the provided handlers.
         """
         for hook_handler in hook_handlers:
             hook_handler.remove()
@@ -1201,7 +1274,10 @@ class HookedModel:
         # raise NotImplementedError("This method is not working. It needs to be fixed")
         cache = ActivationCache()
         hook_handlers = None
-        if target_token_positions is not None or self.additional_interventions is not None:
+        if (
+            target_token_positions is not None
+            or self.additional_interventions is not None
+        ):
             string_tokens = self.to_string_tokens(
                 self.input_handler.get_input_ids(inputs).squeeze()
             )
@@ -1293,8 +1369,9 @@ class HookedModel:
         # example_dict = {}
         n_batches = 0  # Initialize batch counter
 
-        for batch in progress(dataloader, desc="Extracting cache", total=len(dataloader)):
-
+        for batch in progress(
+            dataloader, desc="Extracting cache", total=len(dataloader)
+        ):
             # log_memory_usage("Extract cache - Before batch")
             # tokens, others = batch
             # inputs = {k: v.to(self.first_device) for k, v in tokens.items()}
