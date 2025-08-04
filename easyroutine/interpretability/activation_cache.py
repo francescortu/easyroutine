@@ -118,7 +118,12 @@ class ActivationCache:
             re.compile(r"attn_out_\d+"),
             re.compile(r"avg_attn_pattern_L\dH\d+"),
             re.compile(r"pattern_L\dH+\d+"),
-            re.compile(r"values_\d+"),
+            re.compile(r"head_values_L\dH+\d+"),
+            re.compile(r"head_keys_L\dH+\d+"),
+            re.compile(r"head_queries_L\dH+\d+"),
+            re.compile(r"values_L\d+"),
+            re.compile(r"keys_L\d+"),
+            re.compile(r"queries_L\d+"),
             re.compile(r"input_ids"),
             re.compile(r"mapping_index"),
             re.compile(r"mlp_out_\d+"),
@@ -503,7 +508,13 @@ class ActivationCache:
                 r"pattern_L(\d+)H\d+": lambda m: f"pattern_L{m.group(1)}",
                 r"head_out_\d+": "head_out",
                 r"mlp_out_\d+": "mlp_out",
-                r"values_\d+": "values",
+                r"head_values_L(\d+)H\d+": lambda m: f"head_values_L{m.group(1)}",
+                r"head_keys_L(\d+)H\d+": lambda m: f"head_keys_L{m.group(1)}",
+                r"head_queries_L(\d+)H\d+": lambda m: f"head_queries_L{m.group(1)}",
+                r"values_L(\d+)": lambda m: f"values_L{m.group(1)}",
+                r"keys_L(\d+)": lambda m: f"keys_L{m.group(1)}",
+                r"queries_L(\d+)": lambda m: f"queries_L{m.group(1)}"
+                
             }
 
             for key, size in tree.items():

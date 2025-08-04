@@ -63,6 +63,8 @@ class InterventionConfig(BaseModel):
     hook_func: Any = None
     apply_intervention_func: Any = None
     head_dim: Optional[int] = None
+    num_key_value_groups: Optional[int] = None
+    num_attention_heads: Optional[int] = None
 
     def __getitem__(self, key):
         return getattr(self, key)
@@ -75,7 +77,7 @@ class InterventionConfig(BaseModel):
 
 
 ##
-def columns_attn_mat(hook_name, intervention: Intervention, token_dict):
+def columns_attn_mat(hook_name, intervention: Intervention, token_dict, intervention_config):
     """
     Pre-Hook function to compute the columns to be intervened in the attention matrix.
     """
@@ -107,7 +109,7 @@ def columns_attn_mat(hook_name, intervention: Intervention, token_dict):
     }
 
 
-def rows_attn_mat(hook_name, intervention: Intervention, token_dict):
+def rows_attn_mat(hook_name, intervention: Intervention, token_dict, intervention_config):
     """
     Pre-Hook function to compute the columns to be intervened in the attention matrix.
     """
@@ -139,7 +141,7 @@ def rows_attn_mat(hook_name, intervention: Intervention, token_dict):
     }
 
 
-def grid_attn_mat(hook_name, intervention, token_dict):
+def grid_attn_mat(hook_name, intervention, token_dict, intervention_config):
     try:
         assert (
             isinstance(intervention.token_positions, tuple)
@@ -209,7 +211,7 @@ def block_img_txt_attn_mat(hook_name, intervention, token_dict):
     pass
 
 
-def intervention_resid_full(hook_name, intervention, token_dict):
+def intervention_resid_full(hook_name, intervention, token_dict, intervention_config):
     # compute the pre-hooks information and return the hook_func
     target_positions = []
     for token in intervention["token_positions"]:
@@ -234,7 +236,7 @@ def intervention_resid_full(hook_name, intervention, token_dict):
         ),
     }
 
-def intervention_query_key_value(hook_name, intervention, token_dict):
+def intervention_query_key_value(hook_name, intervention, token_dict, intervention_config):
     """
     Pre-Hook function to compute the values to be intervened in the attention matrix.
     """
@@ -262,7 +264,9 @@ def intervention_query_key_value(hook_name, intervention, token_dict):
             intervention_query_key_value_hook,
             token_indexes=target_positions,
             head=head,
-            head_dim=intervention["head_dim"],
+            head_dim=intervention_config.head_dim,
+            num_key_value_groups = intervention_config.num_key_value_groups,
+            num_attention_heads = intervention_config.num_attention_heads,
             patching_values=intervention["patching_values"],
         ),
     }
@@ -325,6 +329,11 @@ class InterventionManager:
                 hook_name=intervention_config.hook_name,
                 intervention=intervention,
                 token_dict=token_dict,
+                intervention_config = intervention_config,
+                
+                # Pass additional parameters if needed
+                # e.g., num_key_value_groups, num_attention_heads, etc.
+                # head_dim=intervention_config.head_dim,
             )
             hooks.append(hook)
         return hooks
@@ -443,28 +452,34 @@ class InterventionManager:
                     apply_intervention_func=intervention_resid_full,
                 )
             },
-            re.compile(r"values_L\dH\d"): {
+            re.compile(r"head_values_L\d+H\d"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.head_value_hook_name,
                     hook_func=intervention_query_key_value,
-                    apply_intervention_func=intervention_resid_full,
-                    head_dim=self.model_config.head_dim
+                    apply_intervention_func=intervention_query_key_value,
+                    head_dim=self.model_config.head_dim,
+                    num_key_value_groups=self.model_config.num_key_value_groups,
+                    num_attention_heads=self.model_config.num_attention_heads,
                 )
             },
-            re.compile(r"keys_L\d+H\d+"): {
+            re.compile(r"head_keys_L\d+H\d+"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.head_key_hook_name,
                     hook_func=intervention_query_key_value,
-                    apply_intervention_func=intervention_resid_full,
-                    head_dim=self.model_config.head_dim
+                    apply_intervention_func=intervention_query_key_value,
+                    head_dim=self.model_config.head_dim,
+                    num_key_value_groups=self.model_config.num_key_value_groups,
+                    num_attention_heads=self.model_config.num_attention_heads,
                 )
             },
-            re.compile(r"queries_L\d+H\d+"): {
+            re.compile(r"head_queries_L\d+H\d+"): {
                 "full": InterventionConfig(
                     hook_name=self.model_config.head_query_hook_name,
                     hook_func=intervention_query_key_value,
-                    apply_intervention_func=intervention_resid_full,
-                    head_dim=self.model_config.head_dim
+                    apply_intervention_func=intervention_query_key_value,
+                    head_dim=self.model_config.head_dim,
+                    num_key_value_groups=self.model_config.num_key_value_groups,
+                    num_attention_heads=self.model_config.num_attention_heads,
                 )
             },
             # Projected vectors interventions
