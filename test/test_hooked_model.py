@@ -17,44 +17,20 @@ DEVICE = "auto"
 
 
 class BaseHookedModelTestCase(unittest.TestCase):
+    """Base class for all hooked model tests. Contains shared setup."""
+
     __test__ = False
     CONFIG = None
     MODEL: HookedModel
     INPUTS: dict
     TARGET_TOKEN_POSITION: List[str] = ["inputs-partition-0"]
     input_size: int
-    # def setUp(self):
-    #     """
-    #     Set the config and load a tiny llama model for testing
-    #     """
-    #     config = HookedModelConfig(
-    #         model_name="hf-internal-testing/tiny-random-LlamaForCausalLM",
-    #         device_map="balanced",
-    #         torch_dtype=torch.bfloat16,
-    #         attn_implementation="eager",
-    #         batch_size=1,
-    #     )
-    #     self.model = HookedModel(config)
 
-    # config = HookedModelConfig(
-    # model_name="hf-internal-testing/tiny-random-LlamaForCausalLM",
-    # device_map="balanced",
-    # torch_dtype=torch.bfloat16,
-    # attn_implementation="custom_eager",
-    # batch_size=1,
-    # )
-    # self.model = HookedModel(config)
 
-    # self.INPUTS = {
-    #     "input_ids": torch.tensor(
-    #         [[101, 102, 103, 104, 105, 106]], device=self.model.device()
-    #     ),
-    #     "attention_mask": torch.tensor(
-    #         [[1, 1, 1, 1, 1]], device=self.model.device()
-    #     ),
-    # }
+class BasicFunctionalityTestCase(BaseHookedModelTestCase):
+    """Test basic functionality like device, string tokens, forward, extract_cache"""
 
-    # self.TARGET_TOKEN_POSITION = ["inputs-partition-0"]
+    __test__ = False
 
     def test_device(self):
         device = self.MODEL.device()
@@ -106,20 +82,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         Test the extract_cache method of HookedModel.
         """
 
-        # class CustomDataset(Dataset):
-        #     def __init__(self, data):
-        #         self.data = data
-
-        #     def __len__(self):
-        #         return len(self.data)
-
-        #     def __getitem__(self, idx):
-        #         return self.data[idx]
-
         dataloader = [self.INPUTS, self.INPUTS]
-        # dataset = CustomDataset(data)
-        # dataloader = DataLoader(dataset)
-
         target_token_positions = ["last"]
 
         def batch_saver(batch):
@@ -150,7 +113,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         # Create an extraction config with pattern extraction
         extraction_config = ExtractionConfig(
             extract_attn_pattern=True,
-            attn_pattern_avg="mean",
+            attn_pattern_avg="none",
             attn_pattern_row_positions=["all"],
         )
 
@@ -174,7 +137,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         # Test with averaging over examples
         extraction_config_avg = ExtractionConfig(
             extract_attn_pattern=True,
-            attn_pattern_avg="mean",
+            attn_pattern_avg="none",
             attn_pattern_row_positions=["all"],
             avg_over_example=True,
         )
@@ -186,11 +149,119 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         # Check that patterns were averaged over examples (batch dim should be 1)
-        pattern_key = f"pattern_L0H0"
+        pattern_key = "avg_pattern_L0H0"
         self.assertIn(pattern_key, avg_cache)
         self.assertEqual(
             avg_cache[pattern_key].shape, (1, self.input_size, self.input_size)
         )
+
+    def test_slice_tokens(self):
+        """
+        Test the slice_tokens support in the forward method
+        """
+        cache = self.MODEL.forward(
+            self.INPUTS,
+            [(0, 4)],
+            pivot_positions=[4],
+            extraction_config=ExtractionConfig(extract_resid_out=True),
+        )
+
+        self.assertIn("resid_out_0", cache)
+        self.assertEqual(
+            cache["resid_out_0"].shape, (1, 4, self.MODEL.model_config.hidden_size)
+        )
+
+    def test_extract_cache_with_gradient_computation(self):
+        cache_with_gradients = self.MODEL.extract_cache(
+            dataloader=[
+                {**self.INPUTS, "vocabulary_index": 123},
+                {**self.INPUTS, "vocabulary_index": 129},
+            ],
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True, extract_embed=True, keep_gradient=True
+            ),
+            dict_token_index=torch.tensor([0, 1]),
+        )
+        # assert the presence of the keys
+        self.assertIn("input_embeddings_gradients", cache_with_gradients)
+        self.assertEqual(
+            cache_with_gradients["input_embeddings_gradients"].shape,
+            cache_with_gradients["input_embeddings"].shape,
+        )
+
+    def test_module_wrapper(self):
+        """
+        Test if the wrapper that substitutes part of the model works equivalently to the original model.
+        """
+
+        # run the model with the original model
+        self.MODEL.restore_original_modules()
+        cache_original = self.MODEL.forward(
+            self.INPUTS,
+            self.TARGET_TOKEN_POSITION,
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True,
+                extract_resid_in=True,
+                extract_resid_mid=True,
+                extract_attn_in=True,
+            ),
+        )
+
+        self.MODEL.set_custom_modules()
+        cache_custom = self.MODEL.forward(
+            self.INPUTS,
+            self.TARGET_TOKEN_POSITION,
+            extraction_config=ExtractionConfig(
+                extract_resid_out=True,
+                extract_resid_in=True,
+                extract_resid_mid=True,
+                extract_attn_in=True,
+            ),
+        )
+
+        # assert that the output of the original model and the custom model are the same
+        for key in cache_original.keys():
+            if key in cache_custom:
+                if isinstance(cache_original[key], torch.Tensor):
+                    if not torch.allclose(cache_original[key], cache_custom[key]):
+                        print(f"Mismatch found in key: {key}")
+                    self.assertTrue(
+                        torch.allclose(cache_original[key], cache_custom[key])
+                    )
+
+    def test_get_last_layernorm(self):
+        norm = self.MODEL.get_last_layernorm()
+        self.assertIsNotNone(norm)
+
+    def get_lm_head(self):
+        unembed = self.MODEL.get_lm_head()
+        # assert is not None
+        self.assertIsNotNone(unembed)
+
+    def test_generate(self):
+        """
+        Test the generate method of HookedModel. (Not yet implemented)
+        """
+        pass  # TODO: Implement this test
+
+    def test_generate_with_extract_cache(self):
+        """
+        Test generate with extract_cache. (Not yet implemented)
+        """
+        pass
+
+    def test_token_index(self):
+        """
+        Test edge cases for token_index. (Not yet implemented)
+        """
+        pass
+
+
+class HooksTestCase(BaseHookedModelTestCase):
+    """Test all hook functionality - extracting activations and patterns"""
+
+    __test__ = False
 
     def test_hook_resid_out(self):
         cache = self.MODEL.forward(
@@ -313,17 +384,17 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         # assert that cache have "values_L0H1" and "keys_L0H1" and "queries_L0H1"
-        self.assertIn("values_L0H1", cache)
+        self.assertIn("head_values_L0H1", cache)
         self.assertEqual(
-            cache["values_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
+            cache["head_values_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
         )
-        self.assertIn("keys_L0H1", cache)
+        self.assertIn("head_keys_L0H1", cache)
         self.assertEqual(
-            cache["keys_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
+            cache["head_keys_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
         )
-        self.assertIn("queries_L0H1", cache)
+        self.assertIn("head_queries_L0H1", cache)
         self.assertEqual(
-            cache["queries_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
+            cache["head_queries_L0H1"].shape, (1, 4, self.MODEL.model_config.head_dim)
         )
 
     def test_hook_extract_head_key_value_keys_avg(self):
@@ -341,17 +412,70 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         # assert that cache have "values_L0H1" and "keys_L0H1" and "queries_L0H1"
-        self.assertIn("values_L0H1", cache)
+        self.assertIn("head_values_L0H1", cache)
         self.assertEqual(
-            cache["values_L0H1"].shape, (1, 2, self.MODEL.model_config.head_dim)
+            cache["head_values_L0H1"].shape, (1, 2, self.MODEL.model_config.head_dim)
         )
-        self.assertIn("keys_L0H1", cache)
+        self.assertIn("head_keys_L0H1", cache)
         self.assertEqual(
-            cache["keys_L0H1"].shape, (1, 2, self.MODEL.model_config.head_dim)
+            cache["head_keys_L0H1"].shape, (1, 2, self.MODEL.model_config.head_dim)
         )
-        self.assertIn("queries_L0H1", cache)
+        self.assertIn("head_queries_L0H1", cache)
         self.assertEqual(
-            cache["queries_L0H1"].shape, (1, 2, self.MODEL.model_config.head_dim)
+            cache["head_queries_L0H1"].shape, (1, 2, self.MODEL.model_config.head_dim)
+        )
+
+    def test_layer_query_key_value(self):
+        cache = self.MODEL.forward(
+            self.INPUTS,
+            self.TARGET_TOKEN_POSITION,
+            pivot_positions=[4],
+            extraction_config=ExtractionConfig(
+                extract_queries=True,
+                extract_keys=True,
+                extract_values=True,
+            ),
+        )
+
+        self.assertIn("queries_L0", cache)
+        self.assertIn("keys_L0", cache)
+        self.assertIn("values_L0", cache)
+
+        self.assertEqual(
+            cache["queries_L0"].shape,
+            (
+                1,
+                4,
+                (
+                    self.MODEL.model_config.num_attention_heads
+                    * self.MODEL.model_config.head_dim
+                ),
+            ),
+            msg="If the test fail, could be that the model has group attention and the test should be adapted to check for the correct number of heads.",
+        )
+        self.assertEqual(
+            cache["keys_L0"].shape,
+            (
+                1,
+                4,
+                (
+                    self.MODEL.model_config.num_attention_heads
+                    * self.MODEL.model_config.head_dim
+                )
+                // self.MODEL.model_config.num_key_value_groups,
+            ),
+            msg="If the test fail, could be that the model has group attention and the test should be adapted to check for the correct number of heads.",
+        )
+        self.assertEqual(
+            cache["values_L0"].shape,
+            (
+                1,
+                4,
+                self.MODEL.model_config.num_attention_heads
+                * self.MODEL.model_config.head_dim
+                // self.MODEL.model_config.num_key_value_groups,
+            ),
+            msg="If the test fail, could be that the model has group attention and the test should be adapted to check for the correct number of heads.",
         )
 
     def test_hook_extract_head_out(self):
@@ -441,7 +565,7 @@ class BaseHookedModelTestCase(unittest.TestCase):
         )
 
         # Example call
-        cache = self.MODEL.forward(
+        self.MODEL.forward(
             self.INPUTS,
             target_token_positions=["all"],
             pivot_positions=[4],
@@ -553,79 +677,11 @@ class BaseHookedModelTestCase(unittest.TestCase):
             cache["pattern_L1H1"].shape, (1, self.input_size, self.input_size)
         )
 
-    def test_extract_cache_with_gradient_computation(self):
-        cache_with_gradients = self.MODEL.extract_cache(
-            dataloader=[{**self.INPUTS, "vocabulary_index":123} , {**self.INPUTS, "vocabulary_index":129}],
-            target_token_positions=["last"],
-            extraction_config=ExtractionConfig(
-                extract_resid_out=True, 
-                extract_embed=True, 
-                keep_gradient=True
-            ),
-            dict_token_index=torch.tensor([0, 1]),
-        )
-        # assert the presence of the keys
-        self.assertIn("input_embeddings_gradients", cache_with_gradients)
-        self.assertEqual(
-            cache_with_gradients["input_embeddings_gradients"].shape, cache_with_gradients["input_embeddings"].shape
-        )
 
-    def test_module_wrapper(self):
-        """
-        Test if the wrapper that substitutes part of the model works equivalently to the original model.
-        """
+class InterventionsTestCase(BaseHookedModelTestCase):
+    """Test all intervention and ablation functionality"""
 
-        # run the model with the original model
-        self.MODEL.restore_original_modules()
-        cache_original = self.MODEL.forward(
-            self.INPUTS,
-            self.TARGET_TOKEN_POSITION,
-            extraction_config=ExtractionConfig(
-                extract_resid_out=True,
-                extract_resid_in=True,
-                extract_resid_mid=True,
-                extract_attn_in=True,
-            ),
-        )
-
-        self.MODEL.set_custom_modules()
-        cache_custom = self.MODEL.forward(
-            self.INPUTS,
-            self.TARGET_TOKEN_POSITION,
-            extraction_config=ExtractionConfig(
-                extract_resid_out=True,
-                extract_resid_in=True,
-                extract_resid_mid=True,
-                extract_attn_in=True,
-            ),
-        )
-
-        # assert that the output of the original model and the custom model are the same
-        for key in cache_original.keys():
-            if key in cache_custom:
-                if isinstance(cache_original[key], torch.Tensor):
-                    if not torch.allclose(cache_original[key], cache_custom[key]):
-                        print(f"Mismatch found in key: {key}")
-                    self.assertTrue(
-                        torch.allclose(cache_original[key], cache_custom[key])
-                    )
-
-    def test_get_last_layernorm(self):
-        norm = self.MODEL.get_last_layernorm()
-        self.assertIsNotNone(norm)
-
-    def get_lm_head(self):
-        unembed = self.MODEL.get_lm_head()
-
-        # assert is not None
-        self.assertIsNotNone(unembed)
-
-    def test_generate(self):
-        pass  # TODO: Implement this test
-
-    def test_generate_with_extract_cache(self):
-        # TODO: Implement this test
-        pass
+    __test__ = False
 
     def test_ablation_attn_matrix(self):
         ablation_cache = self.MODEL.forward(
@@ -712,13 +768,183 @@ class BaseHookedModelTestCase(unittest.TestCase):
     def test_intervention(self):
         pass
 
+    def test_layer_key_query_value_intervention(self):
+        """
+        Test the key_query_value_intervention method of HookedModel.
+        """
+        # Define a simple intervention
+        intervention_list = [
+            Intervention(
+                type="full",
+                activation=f"values_L{i}",
+                token_positions=["last"],
+                patching_values=torch.ones(
+                    1,
+                    1,
+                    self.MODEL.model_config.head_dim
+                    * self.MODEL.model_config.num_key_value_heads,
+                    dtype=torch.bfloat16,
+                    device=self.MODEL.device(),
+                ),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        intervention_list += [
+            Intervention(
+                type="full",
+                activation=f"keys_L{i}",
+                token_positions=["last"],
+                patching_values=torch.ones(
+                    1,
+                    1,
+                    self.MODEL.model_config.head_dim
+                    * self.MODEL.model_config.num_key_value_heads,
+                    dtype=torch.bfloat16,
+                    device=self.MODEL.device(),
+                ),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        intervention_list += [
+            Intervention(
+                type="full",
+                activation=f"queries_L{i}",
+                token_positions=["last"],
+                patching_values=torch.ones(
+                    1,
+                    1,
+                    self.MODEL.model_config.head_dim
+                    * self.MODEL.model_config.num_attention_heads,
+                    dtype=torch.bfloat16,
+                    device=self.MODEL.device(),
+                ),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        # Apply the intervention
+        self.MODEL.register_interventions(intervention_list)
+        cache = self.MODEL.forward(
+            self.INPUTS,
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_values=True,
+                extract_keys=True,
+                extract_queries=True,
+            ),
+        )
+
+        # Check if the intervention was applied correctly
+        for i in range(self.MODEL.model_config.num_hidden_layers):
+            key = f"values_L{i}"
+            self.assertIn(key, cache)
+            # Check if the values are as expected
+            self.assertTrue(
+                torch.all(cache[key] == 1.0), f"Intervention on {key} failed"
+            )
+            key = f"keys_L{i}"
+            self.assertIn(key, cache)
+            # Check if the keys are as expected
+            self.assertTrue(
+                torch.all(cache[key] == 1.0), f"Intervention on {key} failed"
+            )
+            key = f"queries_L{i}"
+            self.assertIn(key, cache)
+            # Check if the queries are as expected
+            self.assertTrue(
+                torch.all(cache[key] == 1.0), f"Intervention on {key} failed"
+            )
+
+    def test_head_key_query_value_intervention(self):
+        """
+        Test the key_query_value_intervention method of HookedModel.
+        """
+        # Define a simple intervention
+        intervention_list = [
+            Intervention(
+                type="full",
+                activation=f"head_values_L{i}H0",
+                token_positions=["last"],
+                patching_values=torch.ones(
+                    1,
+                    1,
+                    self.MODEL.model_config.head_dim,
+                    dtype=torch.bfloat16,
+                    device=self.MODEL.device(),
+                ),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        intervention_list += [
+            Intervention(
+                type="full",
+                activation=f"head_keys_L{i}H0",
+                token_positions=["last"],
+                patching_values=torch.ones(
+                    1,
+                    1,
+                    self.MODEL.model_config.head_dim,
+                    dtype=torch.bfloat16,
+                    device=self.MODEL.device(),
+                ),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        intervention_list += [
+            Intervention(
+                type="full",
+                activation=f"head_queries_L{i}H0",
+                token_positions=["last"],
+                patching_values=torch.ones(
+                    1,
+                    1,
+                    self.MODEL.model_config.head_dim,
+                    dtype=torch.bfloat16,
+                    device=self.MODEL.device(),
+                ),
+            )
+            for i in range(self.MODEL.model_config.num_hidden_layers)
+        ]
+        # Apply the intervention
+        self.MODEL.register_interventions(intervention_list)
+        cache = self.MODEL.forward(
+            self.INPUTS,
+            target_token_positions=["last"],
+            extraction_config=ExtractionConfig(
+                extract_head_values=True,
+                extract_head_keys=True,
+                extract_head_queries=True,
+            ),
+        )
+
+        # Check if the intervention was applied correctly
+        for i in range(self.MODEL.model_config.num_hidden_layers):
+            key = f"head_values_L{i}H0"
+            self.assertIn(key, cache)
+            # Check if the values are as expected
+            self.assertTrue(
+                torch.all(cache[key].squeeze() == 1.0), f"Intervention on {key} failed"
+            )
+            key = f"head_keys_L{i}H0"
+            self.assertIn(key, cache)
+            # Check if the keys are as expected
+            self.assertTrue(
+                torch.all(cache[key].squeeze() == 1.0), f"Intervention on {key} failed"
+            )
+            key = f"head_queries_L{i}H0"
+            self.assertIn(key, cache)
+            # Check if the queries are as expected
+            self.assertTrue(
+                torch.all(cache[key].squeeze() == 1.0), f"Intervention on {key} failed"
+            )
+
 
 ################### BASE TEST CASES ######################
-class TestHookedTestModel(BaseHookedModelTestCase):
-    """
-    This is a *concrete* test class recognized by the VS Code test explorer.
-    It inherits all test_* methods from BaseHookedModelTestCase.
-    """
+################### CONCRETE TEST CLASSES ##################
+
+
+# Basic Functionality Tests
+class TestHookedTestModelBasic(BasicFunctionalityTestCase):
+    """Test basic functionality for TestModel"""
 
     @classmethod
     def setUpClass(cls):
@@ -737,6 +963,73 @@ class TestHookedTestModel(BaseHookedModelTestCase):
             "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1]], device="cuda"),
         }
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedTestModelHooks(HooksTestCase):
+    """Test hooks functionality for TestModel"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="hf-internal-testing/tiny-random-LlamaForCausalLM",
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        cls.INPUTS = {
+            "input_ids": torch.tensor([[101, 102, 103, 104, 105, 106]], device="cuda"),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1]], device="cuda"),
+        }
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedTestModelInterventions(InterventionsTestCase):
+    """Test interventions functionality for TestModel"""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="hf-internal-testing/tiny-random-LlamaForCausalLM",
+                device_map="auto",
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        cls.INPUTS = {
+            "input_ids": torch.tensor([[101, 102, 103, 104, 105, 106]], device="cuda"),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1]], device="cuda"),
+        }
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+# Legacy class for backwards compatibility (can be removed later)
+# class TestHookedTestModel(BasicFunctionalityTestCase):
+#     """Legacy test class - inherits only basic functionality for backwards compatibility"""
+
+#     @classmethod
+#     def setUpClass(cls):
+#         super().setUpClass()
+#         cls.MODEL = HookedModel(
+#             HookedModelConfig(
+#                 model_name="hf-internal-testing/tiny-random-LlamaForCausalLM",
+#                 device_map="auto",
+#                 torch_dtype=torch.bfloat16,
+#                 attn_implementation="custom_eager",
+#                 batch_size=1,
+#             )
+#         )
+#         cls.INPUTS = {
+#             "input_ids": torch.tensor([[101, 102, 103, 104, 105, 106]], device="cuda"),
+#             "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1]], device="cuda"),
+#         }
+#         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
 
 ################# Utils ####################
@@ -758,7 +1051,7 @@ def get_a_random_pil():
 ################## Test Cases for Chameleon Model ####################
 
 
-class TestHookedChameleonModel(BaseHookedModelTestCase):
+class TestHookedChameleonModelBasic(BasicFunctionalityTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -774,10 +1067,7 @@ class TestHookedChameleonModel(BaseHookedModelTestCase):
         tokenizer = cls.MODEL.get_tokenizer()
         cls.INPUTS = tokenizer(
             text="This is a test. <image>. This is a test",
-            images=[
-                # pil image between 0 and 1
-                get_a_random_pil()
-            ],
+            images=[get_a_random_pil()],
             return_tensors="pt",
         )  # type: ignore
         cls.INPUTS = {k: v.to(cls.MODEL.device()) for k, v in cls.INPUTS.items()}
@@ -787,10 +1077,89 @@ class TestHookedChameleonModel(BaseHookedModelTestCase):
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
 
+class TestHookedChameleonModelHooks(HooksTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="facebook/chameleon-7b",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.INPUTS = {k: v.to(cls.MODEL.device()) for k, v in cls.INPUTS.items()}
+        cls.INPUTS["pixel_values"] = cls.INPUTS["pixel_values"].to(
+            cls.MODEL.config.torch_dtype
+        )
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedChameleonModelInterventions(InterventionsTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="facebook/chameleon-7b",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.INPUTS = {k: v.to(cls.MODEL.device()) for k, v in cls.INPUTS.items()}
+        cls.INPUTS["pixel_values"] = cls.INPUTS["pixel_values"].to(
+            cls.MODEL.config.torch_dtype
+        )
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+# # Legacy class for backwards compatibility (can be removed later)
+# class TestHookedChameleonModel(BasicFunctionalityTestCase):
+#     @classmethod
+#     def setUpClass(cls):
+#         super().setUpClass()
+#         cls.MODEL = HookedModel(
+#             HookedModelConfig(
+#                 model_name="facebook/chameleon-7b",
+#                 device_map=DEVICE,
+#                 torch_dtype=torch.bfloat16,
+#                 attn_implementation="custom_eager",
+#                 batch_size=1,
+#             )
+#         )
+#         tokenizer = cls.MODEL.get_tokenizer()
+#         cls.INPUTS = tokenizer(
+#             text="This is a test. <image>. This is a test",
+#             images=[get_a_random_pil()],
+#             return_tensors="pt",
+#         )  # type: ignore
+#         cls.INPUTS = {k: v.to(cls.MODEL.device()) for k, v in cls.INPUTS.items()}
+#         cls.INPUTS["pixel_values"] = cls.INPUTS["pixel_values"].to(
+#             cls.MODEL.config.torch_dtype
+#         )
+#         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
 ################## Test Cases for pixtral Model ####################
 
 
-class TestHookedPixtralModel(BaseHookedModelTestCase):
+class TestHookedPixtralModelBasic(BasicFunctionalityTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -809,14 +1178,80 @@ class TestHookedPixtralModel(BaseHookedModelTestCase):
             images=[get_a_random_pil()],
             return_tensors="pt",
         )
-
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedPixtralModelHooks(HooksTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="mistral-community/pixtral-12b",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. [IMG]. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedPixtralModelInterventions(InterventionsTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="mistral-community/pixtral-12b",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. [IMG]. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+# Legacy class for backwards compatibility (can be removed later)
+# class TestHookedPixtralModel(BasicFunctionalityTestCase):
+#     @classmethod
+#     def setUpClass(cls):
+#         super().setUpClass()
+#         cls.MODEL = HookedModel(
+#             HookedModelConfig(
+#                 model_name="mistral-community/pixtral-12b",
+#                 device_map=DEVICE,
+#                 torch_dtype=torch.bfloat16,
+#                 attn_implementation="custom_eager",
+#                 batch_size=1,
+#             )
+#         )
+#         tokenizer = cls.MODEL.get_tokenizer()
+#         cls.INPUTS = tokenizer(
+#             text="This is a test. [IMG]. This is a test",
+#             images=[get_a_random_pil()],
+#             return_tensors="pt",
+#         )
+#         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
 
 ################## Test Cases for llava Model ####################
 
 
-class TestHookedLlavaModel(BaseHookedModelTestCase):
+class TestHookedLlavaModelBasic(BasicFunctionalityTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -835,11 +1270,172 @@ class TestHookedLlavaModel(BaseHookedModelTestCase):
             images=[get_a_random_pil()],
             return_tensors="pt",
         )  # type: ignore
-
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
 
-class TestHookedGemma3Model(BaseHookedModelTestCase):
+class TestHookedLlavaModelHooks(HooksTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="llava-hf/llava-v1.6-mistral-7b-hf",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedLlavaModelInterventions(InterventionsTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="llava-hf/llava-v1.6-mistral-7b-hf",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+# Legacy class for backwards compatibility (can be removed later)
+# class TestHookedLlavaModel(BasicFunctionalityTestCase):
+#     @classmethod
+#     def setUpClass(cls):
+#         super().setUpClass()
+#         cls.MODEL = HookedModel(
+#             HookedModelConfig(
+#                 model_name="llava-hf/llava-v1.6-mistral-7b-hf",
+#                 device_map=DEVICE,
+#                 torch_dtype=torch.bfloat16,
+#                 attn_implementation="custom_eager",
+#                 batch_size=1,
+#             )
+#         )
+#         tokenizer = cls.MODEL.get_tokenizer()
+#         cls.INPUTS = tokenizer(
+#             text="This is a test. <image>. This is a test",
+#             images=[get_a_random_pil()],
+#             return_tensors="pt",
+#         )  # type: ignore
+#         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+################## Test Cases for llava-onevision Model ####################
+
+
+class TestHookedLlavaOneVisionModelBasic(BasicFunctionalityTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="llava-hf/llava-onevision-qwen2-7b-ov-hf",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedLlavaOneVisionModelHooks(HooksTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="llava-hf/llava-onevision-qwen2-7b-ov-hf",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedLlavaOneVisionModelInterventions(InterventionsTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="llava-hf/llava-onevision-qwen2-7b-ov-hf",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="This is a test. <image>. This is a test",
+            images=[get_a_random_pil()],
+            return_tensors="pt",
+        )  # type: ignore
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+# Legacy class for backwards compatibility (can be removed later)
+# class TestHookedLlavaOneVisionModel(BasicFunctionalityTestCase):
+#     @classmethod
+#     def setUpClass(cls):
+#         super().setUpClass()
+#         cls.MODEL = HookedModel(
+#             HookedModelConfig(
+#                 model_name="llava-hf/llava-onevision-qwen2-7b-ov-hf",
+#                 device_map=DEVICE,
+#                 torch_dtype=torch.bfloat16,
+#                 attn_implementation="custom_eager",
+#                 batch_size=1,
+#             )
+#         )
+#         tokenizer = cls.MODEL.get_tokenizer()
+#         cls.INPUTS = tokenizer(
+#             text="This is a test. <image>. This is a test",
+#             images=[get_a_random_pil()],
+#             return_tensors="pt",
+#         )  # type: ignore
+#         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+################## Test Cases for Gemma3 Model ####################
+
+
+class TestHookedGemma3ModelBasic(BasicFunctionalityTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -853,27 +1449,69 @@ class TestHookedGemma3Model(BaseHookedModelTestCase):
             )
         )
         tokenizer = cls.MODEL.get_tokenizer()
-        # messages = [
-        #     {
-        #         "role": "system",
-        #         "content": [{"type": "text", "text": "You are a helpful assistant."}]
-        #     },
-        #     {
-        #         "role": "user",
-        #         "content": [
-        #             {"type": "image", "image": get_a_random_pil()},
-        #             {"type": "text", "text": "Describe this image in detail."}
-        #         ]
-        #     }
-        # ]
-
-        # cls.INPUTS  = tokenizer.apply_chat_template(
-        #     messages, add_generation_prompt=True, tokenize=True,
-        #     return_dict=True, return_tensors="pt"
-        # )
-        cls.INPUTS = tokenizer(text="<start_of_image>", images=[get_a_random_pil()], return_tensors="pt")
-        
+        cls.INPUTS = tokenizer(
+            text="<start_of_image>", images=[get_a_random_pil()], return_tensors="pt"
+        )
         cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedGemma3ModelHooks(HooksTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="google/gemma-3-4b-it",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="<start_of_image>", images=[get_a_random_pil()], return_tensors="pt"
+        )
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+class TestHookedGemma3ModelInterventions(InterventionsTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.MODEL = HookedModel(
+            HookedModelConfig(
+                model_name="google/gemma-3-4b-it",
+                device_map=DEVICE,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="custom_eager",
+                batch_size=1,
+            )
+        )
+        tokenizer = cls.MODEL.get_tokenizer()
+        cls.INPUTS = tokenizer(
+            text="<start_of_image>", images=[get_a_random_pil()], return_tensors="pt"
+        )
+        cls.input_size = cls.INPUTS["input_ids"].shape[1]
+
+
+# Legacy class for backwards compatibility (can be removed later)
+# class TestHookedGemma3Model(BasicFunctionalityTestCase):
+#     @classmethod
+#     def setUpClass(cls):
+#         super().setUpClass()
+#         cls.MODEL = HookedModel(
+#             HookedModelConfig(
+#                 model_name="google/gemma-3-4b-it",
+#                 device_map=DEVICE,
+#                 torch_dtype=torch.bfloat16,
+#                 attn_implementation="custom_eager",
+#                 batch_size=1,
+#             )
+#         )
+#         tokenizer = cls.MODEL.get_tokenizer()
+#         cls.INPUTS = tokenizer(text="<start_of_image>", images=[get_a_random_pil()], return_tensors="pt")
+#         cls.input_size = cls.INPUTS["input_ids"].shape[1]
 
 
 # if __name__ == "__main__":
