@@ -333,6 +333,8 @@ class TokenIndex:
             or isinstance(token, tuple)
             or token.startswith("inputs-partition-")
             or token.startswith("random-inputs-partition-")
+            or token.startswith("random-image")
+            or token.startswith("random-text")
             for token in tokens
         ):
             raise ValueError(
@@ -410,7 +412,21 @@ class TokenIndex:
                 random_position_dict[token] = random.sample(
                     token_indexes["image"], n if n else 1
                 )
-
+            elif token.startswith("random-text"):
+                if token == "random-text":
+                    random_position_dict[token] = random.sample(
+                        token_indexes["text"], 1
+                    )
+                else:
+                    n = token.split("-")[-1]
+                    if n.isdigit():
+                        n = int(n)
+                    else:
+                        n = None
+                    random_position_dict[token] = random.sample(
+                        token_indexes["text"], n if n else 1
+                    )
+            
         token_dict = self.get_token_dict(token_indexes, random_position_dict)
         # add the numeric indexe
         token_dict = {**token_dict, **numeric_tokens}

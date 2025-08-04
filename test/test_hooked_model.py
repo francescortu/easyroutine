@@ -43,6 +43,33 @@ class BasicFunctionalityTestCase(BaseHookedModelTestCase):
 
         string_tokens = self.MODEL.to_string_tokens(self.INPUTS["input_ids"])
         self.assertEqual(len(string_tokens), self.input_size)
+        
+    def test_forward_extracting_random_image(self):
+        # check if is multimodal else return
+        if not self.MODEL.is_multimodal():
+            return
+        extracted_token_position = ["random-image"]
+        cache = self.MODEL.forward(self.INPUTS, extracted_token_position)
+        self.assertIn("logits", cache)
+        
+    def test_forward_extracting_random_image_n(self):
+        # check if is multimodal else return
+        if not self.MODEL.is_multimodal():
+            return
+        extracted_token_position = ["random-image-2"]
+        cache = self.MODEL.forward(self.INPUTS, extracted_token_position)
+        self.assertIn("logits", cache)
+        
+    def test_forward_extracting_random_text(self):
+        extracted_token_position = ["random-text"]
+        cache = self.MODEL.forward(self.INPUTS, extracted_token_position)
+        self.assertIn("logits", cache)
+        
+    def test_forward_extracting_random_text_n(self):
+        extracted_token_position = ["random-text-2"]
+        cache = self.MODEL.forward(self.INPUTS, extracted_token_position)
+        self.assertIn("logits", cache)
+        
 
     def test_forward_without_pivot_positions(self):
         extracted_token_position = ["last"]

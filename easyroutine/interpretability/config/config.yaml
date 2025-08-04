@@ -42,6 +42,7 @@ token_position:
   - end-image
   - special
   - random-text
+  - random-text-10
   - random-image
   - random-image-10
 
