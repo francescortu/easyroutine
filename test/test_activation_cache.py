@@ -18,10 +18,10 @@ class TestActivationCache(unittest.TestCase):
         self.cache2 = ActivationCache()
 
         # Set up standard keys
-        self.cache1["values_0"] = torch.tensor([1, 2])
+        self.cache1["head_values_L0"] = torch.tensor([1, 2])
         self.cache1["mapping_index"] = [0, 1]
 
-        self.cache2["values_0"] = torch.tensor([3, 4])
+        self.cache2["head_values_L0"] = torch.tensor([3, 4])
         self.cache2["mapping_index"] = [2, 3]
 
         # Ensure that the aggregator for mapping_index uses the desired behavior:
@@ -30,13 +30,13 @@ class TestActivationCache(unittest.TestCase):
     def test_cat_standard(self):
         """
         Test merging two caches using default aggregation:
-         - For tensors ("values_0") aggregation should attempt to torch.cat.
+         - For tensors ("head_values_L0") aggregation should attempt to torch.cat.
          - For "mapping_index" the custom aggregator should keep the original value.
         """
         self.cache1.cat(self.cache2)
         # Expect torch.cat along dim=0 to yield tensor([1, 2, 3, 4])
         self.assertTrue(
-            torch.equal(self.cache1["values_0"], torch.tensor([1, 2, 3, 4])),
+            torch.equal(self.cache1["head_values_L0"], torch.tensor([1, 2, 3, 4])),
             "Tensor aggregation (torch.cat) did not yield expected result.",
         )
         # The aggregator for mapping_index (just_old) should keep the original list.
@@ -54,13 +54,13 @@ class TestActivationCache(unittest.TestCase):
         """
         # Register a new aggregator that stacks tensors.
         self.cache1.register_aggregation(
-            "values_0",
+            "head_values_L0",
             lambda old, new: new if old is None else torch.stack([old, new], dim=0),
         )
         self.cache1.cat(self.cache2)
         expected = torch.stack([torch.tensor([1, 2]), torch.tensor([3, 4])], dim=0)
         self.assertTrue(
-            torch.equal(self.cache1["values_0"], expected),
+            torch.equal(self.cache1["head_values_L0"], expected),
             "Custom aggregator for 'values_0' did not stack tensors as expected.",
         )
 
@@ -72,7 +72,7 @@ class TestActivationCache(unittest.TestCase):
         with self.cache1.deferred_mode():
             self.cache1.cat(self.cache2)
         self.assertTrue(
-            torch.equal(self.cache1["values_0"], torch.tensor([1, 2, 3, 4])),
+            torch.equal(self.cache1["head_values_L0"], torch.tensor([1, 2, 3, 4])),
             "Deferred mode did not aggregate tensor values as expected.",
         )
         self.assertEqual(
@@ -96,8 +96,8 @@ class TestActivationCache(unittest.TestCase):
         empty_cache = ActivationCache()
         empty_cache.cat(self.cache1)
         self.assertTrue(
-            torch.equal(empty_cache["values_0"], torch.tensor([1, 2])),
-            "Empty cache did not initialize the 'values_0' key correctly.",
+            torch.equal(empty_cache["head_values_L0"], torch.tensor([1, 2])),
+            "Empty cache did not initialize the 'head_values_L0' key correctly.",
         )
         self.assertEqual(
             empty_cache["mapping_index"],
@@ -209,7 +209,7 @@ class TestActivationCache(unittest.TestCase):
             self.fail(f"torch.load failed with exception: {e}")
 
         self.assertTrue(
-            torch.equal(loaded_cache["values_0"], torch.tensor([1, 2])),
+            torch.equal(loaded_cache["head_values_L0"], torch.tensor([1, 2])),
             "Loaded cache 'values_0' does not match expected tensor.",
         )
         # Cleanup temporary file
@@ -365,10 +365,10 @@ class TestActivationCache(unittest.TestCase):
 
         # Create tensors with significantly different sizes
         # Small tensor (KB range)
-        cache["values_0"] = torch.randn(1000, dtype=torch.float32)  # ~4KB
+        cache["head_values_L0"] = torch.randn(1000, dtype=torch.float32)  # ~4KB
 
         # Medium tensor (MB range)
-        cache["values_1"] = torch.randn(500000, dtype=torch.float32)  # ~2MB
+        cache["head_values_L1"] = torch.randn(500000, dtype=torch.float32)  # ~2MB
 
         # Get grouped memory tree
         tree = cache.memory_tree(print_tree=False, grouped_tree=True)

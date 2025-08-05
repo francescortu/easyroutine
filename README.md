@@ -2,6 +2,7 @@
 
 This is just a simple collection of routines that I use frequently. I have found that I often need to do the same things over and over again, so I have created this repository to store them. I hope you find them useful.
 
+
 ## Installation
 
 
@@ -50,3 +51,5 @@ For publish the package push a commit with the flag:
   - `[major]`: 2.x.x -> 3.0.0
 
 Example commit: `fix multiple bus [patch]`
+
+-

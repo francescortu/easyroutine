@@ -13,6 +13,7 @@ models:
   google/gemma-3-4b-it:  ["<start_of_image>", null, "<end_of_image>"]
   google/gemma-3-12b-it:  ["<start_of_image>", null, "<end_of_image>"]
   google/gemma-3-27b-it:  ["<start_of_image>", null, "<end_of_image>"]
+  llava-hf/llava-onevision-qwen2-7b-ov-hf: ["<image>", null, "<image>"]
 
 tokenizer_placeholder:
   facebook/chameleon-7b: "<image>"
@@ -28,6 +29,7 @@ tokenizer_placeholder:
   google/gemma-3-4b-it: "<start_of_image>"
   google/gemma-3-12b-it: "<start_of_image>"
   google/gemma-3-27b-it: "<start_of_image>"
+  llava-hf/llava-onevision-qwen2-7b-ov-hf: "<image>"
 
 token_position:
   - last
@@ -40,6 +42,7 @@ token_position:
   - end-image
   - special
   - random-text
+  - random-text-10
   - random-image
   - random-image-10
 

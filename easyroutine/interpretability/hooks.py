@@ -15,6 +15,16 @@ import itertools
 
 
 def process_args_kwargs_output(args, kwargs, output):
+    """
+    Extract the main tensor from output, args, or kwargs.
+    Prioritizes output (first element if tuple), then first arg, then kwargs['hidden_states'] if present.
+    Args:
+        args: Positional arguments from the hook.
+        kwargs: Keyword arguments from the hook.
+        output: Output from the hooked function.
+    Returns:
+        The main tensor to be processed by the hook.
+    """
     if output is not None:
         if isinstance(output, tuple):
             b = output[0]
@@ -34,7 +44,14 @@ def process_args_kwargs_output(args, kwargs, output):
 
 def restore_same_args_kwargs_output(b, args, kwargs, output):
     """
-    Inverse of process_args_kwargs_output
+    Restore the structure of output, args, and kwargs after modification.
+    Args:
+        b: The new tensor to insert.
+        args: Original positional arguments.
+        kwargs: Original keyword arguments.
+        output: Original output from the hooked function.
+    Returns:
+        The updated output, or (args, kwargs) if output is None.
     """
 
     if output is not None:
@@ -83,7 +100,15 @@ def create_dynamic_hook(pyvene_hook: Callable, **kwargs):
 
 def embed_hook(module, args, kwargs, output, token_indexes, cache, cache_key):
     r"""
-    Hook function to extract the embeddings of the tokens. It will save the embeddings in the cache (a global variable out the scope of the function)
+    Hook function to extract the embeddings of the specified tokens and save them in the cache.
+    Args:
+        module: The module being hooked.
+        args: Positional arguments.
+        kwargs: Keyword arguments.
+        output: Output from the module.
+        token_indexes: List of token indexes to extract.
+        cache: The cache object to store results.
+        cache_key: The key under which to store the embeddings.
     """
     b = process_args_kwargs_output(args, kwargs, output)
     cache[cache_key] = []
@@ -118,6 +143,19 @@ def compute_statistics(tensor, dim=-1, keepdim=True, eps=1e-6):
 def layernom_hook(
     module, args, kwargs, output, token_indexes, cache, cache_key, avg: bool = False
 ):
+    """
+    Compute and save mean, variance, and second moment for the specified token indexes.
+    If avg is True, computes statistics for each token group; otherwise, flattens indexes.
+    Args:
+        module: The module being hooked.
+        args: Positional arguments.
+        kwargs: Keyword arguments.
+        output: Output from the module.
+        token_indexes: List of token index groups.
+        cache: The cache object to store results.
+        cache_key: The key under which to store the statistics.
+        avg: Whether to average over each token group separately.
+    """
     b = process_args_kwargs_output(args, kwargs, output)
     if avg:
         token_avgs = []
@@ -149,7 +187,17 @@ def save_resid_hook(
     avg: bool = False,
 ):
     r"""
-    It save the activations of the residual stream in the cache. It will save the activations in the cache (a global variable out the scope of the function)
+    Save the activations of the residual stream for the specified token indexes in the cache.
+    If avg is True, saves averaged activations for each token group.
+    Args:
+        module: The module being hooked.
+        args: Positional arguments.
+        kwargs: Keyword arguments.
+        output: Output from the module.
+        cache: The cache object to store results.
+        cache_key: The key under which to store the activations.
+        token_indexes: List of token index groups.
+        avg: Whether to average over each token group separately.
     """
     b = process_args_kwargs_output(args, kwargs, output)
 
@@ -197,6 +245,9 @@ def intervention_resid_hook(
         logger.debug(
             "Patching values provided, applying patching values to the residual stream"
         )
+        assert b[..., list(token_indexes), :].shape == patching_values.shape, (
+            f"Shape mismatch: activations is {b[..., list(token_indexes), :].shape} but patching values is {patching_values.shape}"
+        )
         b[..., list(token_indexes), :] = patching_values
     return restore_same_args_kwargs_output(b, args, kwargs, output)
 
@@ -212,6 +263,7 @@ def query_key_value_hook(
     layer,
     head_dim,
     num_key_value_groups: int,
+    num_attention_heads: int,
     head: Union[str, int] = "all",
     avg: bool = False,
 ):
@@ -221,8 +273,16 @@ def query_key_value_hook(
     b = process_args_kwargs_output(args, kwargs, output)
     input_shape = b.shape[:-1]
     hidden_shape = (*input_shape, -1, head_dim)
+
     b = b.view(hidden_shape).transpose(1, 2)
     # cache[cache_key] = b.data.detach().clone()[..., token_index, :]
+    if (
+        num_key_value_groups > 1 and b.size(1) != num_attention_heads
+    ):  # we are in kv group attention
+        # we need to repeat the key and value states
+        b = repeat_kv(b, num_attention_heads // b.size(1))
+
+    # check if we are using kv group attention
 
     info_string = "Shape: batch seq_len d_head"
 
@@ -231,7 +291,7 @@ def query_key_value_hook(
         # Compute the group index for keys/values if needed.
         group_idx = head_idx // (b.size(1) // num_key_value_groups)
         # Decide whether to use group_idx or head_idx based on cache_key.
-        if "values_" in cache_key or "keys_" in cache_key:
+        if "head_values_" in cache_key or "head_keys_" in cache_key:
             # Select the slice corresponding to the group index.
             tensor_slice = b.data.detach().clone()[:, group_idx, ...]
         else:
@@ -260,6 +320,69 @@ def query_key_value_hook(
         # Build a unique key for the cache by including layer and head information.
         key = f"{cache_key}L{layer}H{head_idx}"
         cache.add_with_info(key, processed_tokens, info_string)
+
+
+def intervention_query_key_value_hook(
+    module,
+    args,
+    kwargs,
+    output,
+    token_indexes,
+    head,
+    head_dim,
+    num_key_value_groups: int,
+    num_attention_heads: int,
+    patching_values: Optional[Union[str, torch.Tensor]] = None,
+):
+    r"""
+    Hook function to intervene on the query, key and value vectors. It first unpack the vectors from the output of the module and then apply the intervention and then repack the vectors.
+    """
+    b = process_args_kwargs_output(args, kwargs, output)
+    # input_shape = b.shape[-1]
+    # hidden_shape = (*input_shape, -1, head_dim)
+    hidden_shape = b.shape
+    # b = b.view(hidden_shape).transpose(1, 2)
+
+    if (
+        num_key_value_groups > 1 and b.size(-1) < num_attention_heads * head_dim
+    ):  # we are in kv group attention
+        b = einops.rearrange(
+            b,
+            "batch seq_len (num_attention_heads head_dim) -> batch num_attention_heads seq_len head_dim",
+            num_attention_heads=num_attention_heads // num_key_value_groups,
+            head_dim=head_dim,
+        )
+    # check if we are using kv group attention
+    else:
+        b = einops.rearrange(
+            b,
+            "batch seq_len (num_attention_heads head_dim) -> batch num_attention_heads seq_len head_dim",
+            num_attention_heads=num_attention_heads,
+            head_dim=head_dim,
+        )
+
+    # tensor_head = b.data.detach().clone()[:, head, ...]
+    # Apply the intervention
+    if patching_values is None or patching_values == "ablation":
+        logger.debug(
+            "No patching values provided, ablation will be performed on the query, key and value vectors"
+        )
+        b[:, head, token_indexes, :] = 0
+    else:
+        logger.debug(
+            "Patching values provided, applying patching values to the query, key and value vectors"
+        )
+        b[:, head, list(token_indexes), :] = patching_values
+
+    # Repack the vectors
+    b = einops.rearrange(
+        b,
+        "batch num_attention_heads seq_len head_dim -> batch seq_len (num_attention_heads head_dim)",
+    )
+
+    # Restore the args and kwargs
+    b = restore_same_args_kwargs_output(b, args, kwargs, output)
+    return b
 
 
 def avg_hook(
@@ -956,7 +1079,7 @@ def attention_pattern_head(
 
     Avg strategies:
         If the attn_pattern_avg is not "none", the attention pattern is divided in blocks and the average value of each block is computed, using the method specified in attn_pattern_avg.
-        The idea is to partition the attention pattern into groups of tokens, and then compute a single average value for each group. The pattern is divided into len(attn_pattern_row_partition) x len(token_indexes) blocks, where each block is a subset of the attention pattern. Each block B_ij is defined to have the indeces of the rows in attn_pattern_row_partition[i] and the columns in token_indexes[j]. If attn_pattern_row_partition is None, then the rows are the same as token_indexes.
+        The idea is to partition the attention pattern into groups of tokens, and then compute a single average value for each group. The pattern is divided into len(attn_pattern_row_partition) x len(token_indexes) blocks, where each block B_ij is defined to have the indeces of the rows in attn_pattern_row_partition[i] and the columns in token_indexes[j]. If attn_pattern_row_partition is None, then the rows are the same as token_indexes.
 
         0| a_00 0    0    0    0    0    0              token_indexes = [(1,3), (4)]
         1| a_10 a_11 0    0    0    0    0              attn_pattern_row_partition = [(0,1)]
@@ -1099,18 +1222,28 @@ def attention_pattern_head(
 
 
 def input_embedding_hook(
-    module, args, kwargs, output, cache, cache_key, token_indexes, keep_gradient: bool = False, avg: bool = False
+    module,
+    args,
+    kwargs,
+    output,
+    cache,
+    cache_key,
+    token_indexes,
+    keep_gradient: bool = False,
+    avg: bool = False,
 ):
     r"""
     Hook to capture the output of the embedding layer, enable gradients, and store it in the cache.
     """
     embeddings_tensor = process_args_kwargs_output(args, kwargs, output)
-   
+
     if keep_gradient:
         # Enable gradient tracking for the embeddings tensor
         embeddings_tensor.requires_grad_(True).retain_grad()
-        cache[cache_key] = embeddings_tensor # we slice in the end if keep gradient
-        return restore_same_args_kwargs_output(embeddings_tensor, args, kwargs, output)  # Return the original (potentially modified in-place) output structure
+        cache[cache_key] = embeddings_tensor  # we slice in the end if keep gradient
+        return restore_same_args_kwargs_output(
+            embeddings_tensor, args, kwargs, output
+        )  # Return the original (potentially modified in-place) output structure
     if avg:
         token_avgs = []
         for token_tuple in token_indexes:
@@ -1119,14 +1252,14 @@ def input_embedding_hook(
             # Average over the token dimension (dim=1) and keep that dimension.
             token_avg = torch.mean(token_slice, dim=1, keepdim=True)
             token_avgs.append(token_avg)
-        cache[cache_key] = (
-            torch.cat(token_avgs, dim=1)  # Store the tensor that's part of the graph
-        )
+        cache[cache_key] = torch.cat(
+            token_avgs, dim=1
+        )  # Store the tensor that's part of the graph
     else:
         flatten_indexes = [item for tup in token_indexes for item in tup]
-        cache[cache_key] = (
-            embeddings_tensor[:,flatten_indexes,:]  # Store the tensor that's part of the graph
-        )
+        cache[cache_key] = embeddings_tensor[
+            :, flatten_indexes, :
+        ]  # Store the tensor that's part of the graph
 
     return (
         output  # Return the original (potentially modified in-place) output structure

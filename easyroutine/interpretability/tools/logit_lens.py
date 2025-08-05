@@ -5,9 +5,8 @@ from typing import Union, Optional, Tuple, List, Literal
 from easyroutine.interpretability.activation_cache import ActivationCache
 from easyroutine.interpretability.hooked_model import HookedModel
 from easyroutine.interpretability.models import ModelConfig
-from easyroutine.logger import logger
-from easyroutine.console import progress_bar
-from tqdm import tqdm
+# from easyroutine.logger import logger
+from easyroutine.console import progress
 from copy import deepcopy
 import re
 from pathlib import Path
