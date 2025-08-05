@@ -179,6 +179,7 @@ def intervention_resid_hook(
     output,
     token_indexes,
     patching_values: Optional[Union[str, torch.Tensor]] = None,
+    multiplication_value: float = 0.0,
 ):
     r"""
     Hook function to ablate the tokens in the residual stream. It will set to 0 the value vector of the
@@ -191,7 +192,7 @@ def intervention_resid_hook(
         logger.debug(
             "No patching values provided, ablation will be performed on the residual stream"
         )
-        b[..., token_indexes, :] = 0
+        b[..., token_indexes, :] = multiplication_value * b[..., token_indexes, :]
     else:
         logger.debug(
             "Patching values provided, applying patching values to the residual stream"

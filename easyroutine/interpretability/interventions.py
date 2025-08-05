@@ -229,8 +229,10 @@ def intervention_resid_full(hook_name, intervention, token_dict):
             intervention_resid_hook,
             token_indexes=target_positions,
             patching_values=intervention["patching_values"],
+            multiplication_value=intervention["multiplication_value"],
         ),
     }
+
 
 
 class InterventionManager:
