@@ -175,6 +175,30 @@ def is_non_interactive_batch() -> bool:
     Returns:
         bool: True if in a non-interactive batch job, False otherwise
     """
+    # CRITICAL JUPYTER CHECK: This is the most important check for Jupyter
+    # Since we know from diagnostics that Jupyter modules are loaded,
+    # prioritize this check before any other checks
+    jupyter_modules = [
+        m
+        for m in sys.modules.keys()
+        if "jupyter" in m.lower() or "ipykernel" in m.lower()
+    ]
+    if jupyter_modules:
+        # If any Jupyter/IPython modules are loaded, we're in a Jupyter notebook
+        return False
+
+    # Also check for get_ipython presence - should catch most Jupyter environments
+    try:
+        get_ipython = globals().get("get_ipython", None)
+        if get_ipython is not None:
+            return False  # If get_ipython exists, we're in a Jupyter-like environment
+    except Exception:
+        pass
+
+    # Check for common Jupyter environment variables
+    if os.environ.get("JPY_PARENT_PID") or os.environ.get("JUPYTER_CONFIG_DIR"):
+        return False
+
     # Definite indicators of batch execution
     batch_env_vars = ["SLURM_JOB_ID", "PBS_JOBID", "LSB_JOBID", "SGE_TASK_ID"]
     for var in batch_env_vars:
@@ -196,6 +220,7 @@ def is_non_interactive_batch() -> bool:
         # a pseudo-terminal that can handle rich output
         if "SLURM_PTY_PORT" in os.environ:
             return False
+
         return True
 
     return False
