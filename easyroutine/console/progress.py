@@ -11,6 +11,7 @@ import sys
 import time
 import os
 import logging
+import threading
 
 T = TypeVar("T")
 
@@ -23,12 +24,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("progress")
 
+# Thread-local storage for shared Progress instance and nesting level
+_thread_local = threading.local()
+
 
 class LoggingProgress:
     """
     A progress tracker designed for batch environments (sbatch, etc.)
     that outputs clean, consistent progress updates to stdout/stderr.
     """
+    
+    # Class-level variable to track nesting across instances
+    _nesting_level = 0
 
     def __init__(self, log_interval: int = 5, update_frequency: int = 0):
         """
@@ -41,16 +48,21 @@ class LoggingProgress:
         self.tasks = {}
         self.log_interval = log_interval
         self.update_frequency = update_frequency
+        self.nesting_level = 0
 
     def __enter__(self):
+        LoggingProgress._nesting_level += 1
+        self.nesting_level = LoggingProgress._nesting_level
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        pass
+        LoggingProgress._nesting_level = max(0, LoggingProgress._nesting_level - 1)
 
     def add_task(self, description: str, total: int = None, **kwargs):
         """Add a task to track."""
         task_id = len(self.tasks)
+        # Add indentation based on nesting level
+        indent = "  " * (self.nesting_level - 1) if self.nesting_level > 0 else ""
         self.tasks[task_id] = {
             "description": description,
             "total": total,
@@ -58,9 +70,10 @@ class LoggingProgress:
             "start_time": time.time(),
             "last_log_time": 0,  # 0 ensures first update is always logged
             "last_item_logged": 0,
+            "indent": indent,
         }
         if description:
-            print(f"\n[PROGRESS] Starting: {description} (Total: {total or 'unknown'})")
+            print(f"\n{indent}[PROGRESS] Starting: {description} (Total: {total or 'unknown'})")
         return task_id
 
     def update(self, task_id, advance=1, **kwargs):
@@ -71,6 +84,7 @@ class LoggingProgress:
         task = self.tasks[task_id]
         task["completed"] += advance
         current_time = time.time()
+        indent = task.get("indent", "")
 
         # Determine if we should log based on either time interval or item count
         should_log = False
@@ -95,13 +109,13 @@ class LoggingProgress:
                     else 0
                 )
                 print(
-                    f"[PROGRESS] {task['description']}: {task['completed']}/{task['total']} "
+                    f"{indent}[PROGRESS] {task['description']}: {task['completed']}/{task['total']} "
                     f"({percentage:.1f}%) - Elapsed: {format_time(elapsed)}, "
                     f"Remaining: {format_time(remaining)}"
                 )
             else:
                 print(
-                    f"[PROGRESS] {task['description']}: {task['completed']} items - "
+                    f"{indent}[PROGRESS] {task['description']}: {task['completed']} items - "
                     f"Elapsed: {format_time(elapsed)}"
                 )
             task["last_log_time"] = current_time
@@ -119,6 +133,7 @@ class LoggingProgress:
 
         task_id = self.add_task(description, total=total)
         count = 0
+        indent = self.tasks[task_id].get("indent", "")
 
         for item in iterable:
             count += 1
@@ -129,7 +144,7 @@ class LoggingProgress:
         if total:
             elapsed = time.time() - self.tasks[task_id]["start_time"]
             print(
-                f"[PROGRESS] Complete: {description} - {count}/{total} items in {format_time(elapsed)}"
+                f"{indent}[PROGRESS] Complete: {description} - {count}/{total} items in {format_time(elapsed)}"
             )
 
 
@@ -165,6 +180,99 @@ class _NoOpProgress:
     def update(self, *args, **kwargs):
         """A no-op update."""
         pass
+
+
+class _SharedProgress:
+    """
+    Wrapper around Rich Progress that supports nesting by sharing a single Progress instance.
+    Uses thread-local storage to track the shared Progress instance and nesting level.
+    """
+
+    def __init__(self):
+        """Initialize the shared progress wrapper."""
+        self.task_ids = []
+        self.nesting_level = 0
+        
+    def __enter__(self):
+        # Initialize thread-local variables if not already set
+        if not hasattr(_thread_local, 'progress_instance'):
+            _thread_local.progress_instance = None
+            _thread_local.nesting_level = 0
+            _thread_local.ref_count = 0
+        
+        # If this is the first (outermost) progress bar, create the Progress instance
+        if _thread_local.nesting_level == 0:
+            _thread_local.progress_instance = Progress(
+                TextColumn("[progress.description]{task.description}:"),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TextColumn("•"),
+                TimeElapsedColumn(),
+                TextColumn("•"),
+                TimeRemainingColumn(),
+            )
+            _thread_local.progress_instance.__enter__()
+        
+        _thread_local.nesting_level += 1
+        self.nesting_level = _thread_local.nesting_level
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        # Remove all tasks that this instance created
+        for task_id in reversed(self.task_ids):
+            try:
+                _thread_local.progress_instance.remove_task(task_id)
+            except Exception:
+                pass  # Task might already be removed
+        
+        _thread_local.nesting_level -= 1
+        
+        # If this was the outermost progress bar, clean up the Progress instance
+        if _thread_local.nesting_level == 0:
+            _thread_local.progress_instance.__exit__(exc_type, exc_value, traceback)
+            _thread_local.progress_instance = None
+    
+    def add_task(self, description: str, total: int = None, **kwargs):
+        """Add a task to the shared Progress instance with indentation for nested tasks."""
+        # Add indentation for nested tasks (levels > 1)
+        indent = "  " * (self.nesting_level - 1) if self.nesting_level > 1 else ""
+        indented_description = f"{indent}{description}" if indent else description
+        
+        task_id = _thread_local.progress_instance.add_task(
+            indented_description, 
+            total=total, 
+            **kwargs
+        )
+        self.task_ids.append(task_id)
+        return task_id
+    
+    def update(self, task_id, advance=1, **kwargs):
+        """Update task progress."""
+        _thread_local.progress_instance.update(task_id, advance=advance, **kwargs)
+    
+    def track(
+        self, iterable: Iterable[T], total: Optional[int] = None, description: str = ""
+    ) -> Iterable[T]:
+        """Track progress through an iterable."""
+        if total is None:
+            try:
+                total = len(iterable)
+            except (TypeError, AttributeError):
+                pass
+        
+        task_id = self.add_task(description, total=total)
+        
+        for item in iterable:
+            yield item
+            self.update(task_id)
+        
+        # Remove task when done
+        try:
+            _thread_local.progress_instance.remove_task(task_id)
+            self.task_ids.remove(task_id)
+        except Exception:
+            pass  # Task might already be removed
 
 
 def is_non_interactive_batch() -> bool:
@@ -267,17 +375,8 @@ def get_progress_bar(
             log_interval=log_interval, update_frequency=update_frequency
         )
 
-    # Use rich progress for interactive environments
-    return Progress(
-        TextColumn("[progress.description]{task.description}:"),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TextColumn("•"),
-        TimeElapsedColumn(),
-        TextColumn("•"),
-        TimeRemainingColumn(),
-    )
+    # Use shared Rich progress for interactive environments to support nesting
+    return _SharedProgress()
 
 
 def progress(
@@ -297,7 +396,21 @@ def progress(
     - In interactive sessions (including interactive Slurm jobs), it shows a rich progress bar
     - In non-interactive batch jobs (like sbatch), it uses simple text-based progress tracking
 
-    e.g. `for i in progress(range(10)):`
+    Nested progress bars are fully supported! Simply nest progress() calls within each other.
+    Nested bars will be indented automatically to show the hierarchy.
+
+    Example:
+        Basic usage:
+            for i in progress(range(10), description="Processing"):
+                # do work
+                pass
+
+        Nested usage:
+            for i in progress(range(5), description="Outer loop"):
+                # do outer work
+                for j in progress(range(3), description="Inner loop"):
+                    # do inner work
+                    pass
 
     Args:
         iterable: The iterable to wrap with a progress bar.
