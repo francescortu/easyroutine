@@ -27,3 +27,13 @@ pydantic = "^2.10.6"
 litellm = "^1.74.0"
 vllm = "0.9"
 ipywidgets = "^8.1.7"
+streamlit = "^1.50.0"
+
+[tool.poetry.extras]
+streamlit = ["streamlit"]
+
+[tool.poetry.group.streamlit]
+optional = true
+
+[tool.poetry.group.streamlit.dependencies]
+streamlit = "^1.40.0"
