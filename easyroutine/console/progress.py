@@ -175,6 +175,16 @@ def is_non_interactive_batch() -> bool:
     Returns:
         bool: True if in a non-interactive batch job, False otherwise
     """
+    # Check if running in Jupyter/IPython - these environments can display rich output
+    # even though sys.stdout.isatty() returns False
+    try:
+        get_ipython()
+        # We're in IPython/Jupyter, which supports rich output
+        return False
+    except NameError:
+        # Not in IPython/Jupyter, continue with other checks
+        pass
+    
     # Definite indicators of batch execution
     batch_env_vars = ["SLURM_JOB_ID", "PBS_JOBID", "LSB_JOBID", "SGE_TASK_ID"]
     for var in batch_env_vars:
