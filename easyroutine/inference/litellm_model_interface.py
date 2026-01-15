@@ -18,6 +18,7 @@ class LiteLLMInferenceModelConfig(BaseInferenceModelConfig):
     openai_api_key: str = ''
     anthropic_api_key: str = ''
     xai_api_key: str = ''
+    openrouter_api_key: str = ''
     
 class LiteLLMInferenceModel(BaseInferenceModel):
     
@@ -30,6 +31,7 @@ class LiteLLMInferenceModel(BaseInferenceModel):
         os.environ['OPENAI_API_KEY'] = self.config.openai_api_key
         os.environ['ANTHROPIC_API_KEY'] = self.config.anthropic_api_key
         os.environ['XAI_API_KEY'] = self.config.xai_api_key
+        os.environ['OPENROUTER_API_KEY'] = self.config.openrouter_api_key
         
     def convert_chat_messages_to_custom_format(self, chat_messages: List[dict[str, str]]) -> List[dict[str, str]]:
         """
