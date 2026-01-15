@@ -1,4 +1,5 @@
 import unittest
+import os
 from easyroutine.inference.vllm_model_interface import (
     VLLMInferenceModel,
     VLLMInferenceModelConfig,
@@ -70,6 +71,16 @@ class LiteLLMInferenceModelTest(unittest.TestCase):
         # We expect an exception because the model name is empty.
         with self.assertRaises(Exception):
             self.model.chat(chat_messages)
+
+    def test_openrouter_api_key_set(self):
+        """Test that OpenRouter API key is properly set in environment."""
+        test_key = "test_openrouter_key_123"
+        config = LiteLLMInferenceModelConfig(
+            model_name="openrouter/anthropic/claude-2",
+            openrouter_api_key=test_key
+        )
+        model = LiteLLMInferenceModel(config)
+        self.assertEqual(os.environ.get('OPENROUTER_API_KEY'), test_key)
 
 
 if __name__ == "__main__":
