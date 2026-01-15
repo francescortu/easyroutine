@@ -1,4 +1,5 @@
 import unittest
+import os
 from easyroutine.inference.vllm_model_interface import (
     VLLMInferenceModel,
     VLLMInferenceModelConfig,
@@ -73,7 +74,6 @@ class LiteLLMInferenceModelTest(unittest.TestCase):
 
     def test_openrouter_api_key_set(self):
         """Test that OpenRouter API key is properly set in environment."""
-        import os
         test_key = "test_openrouter_key_123"
         config = LiteLLMInferenceModelConfig(
             model_name="openrouter/anthropic/claude-2",
